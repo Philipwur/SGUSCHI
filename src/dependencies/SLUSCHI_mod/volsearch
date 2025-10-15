@@ -225,7 +225,8 @@ while ($stopflag == 0)
           cp ML_ABN ML_AB                                                       
           $sluschipath/UpdateINCAR ML_ISTART 1                                  
       endif
-      python $sluschipath/OxidationStep.py
+      #Oxidation step is preformed within Dir_VolSearch
+      python $sluschipath/../../workflow/OxidationStep.py 
       $vaspcmd jobsub >> jobsub.log
       set nstep = `expr $nstep + 1`
       echo Job $nstep submitted. Waiting for job $nstep to finish... 
