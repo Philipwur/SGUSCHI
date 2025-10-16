@@ -4,6 +4,8 @@
 import pandas as pd
 import numpy as np
 import os
+from tqdm import tqdm
+import re
 
 import OxidationAnalysis as an
 
@@ -38,6 +40,7 @@ def FixElementFormatting(Position, ReturnPrevNames = False):
     else:
         return Position
 
+
 def AddElementsToPos(Position, AtomInfo):
     
     """
@@ -62,6 +65,155 @@ def AddElementsToPos(Position, AtomInfo):
     Position.insert(0, 'Element', Elements)
 
     return Position
+
+
+
+def XYZTrajectoryParser(FilePath=None,
+                        WorkDir=None,
+                        AssumeStaticCell=True,
+                        CellChangeTolerance=1e-10,
+                        ShowProgress=False,
+                        ReadFirstAndLastOnly=False):
+    """
+    Efficiently parse an extended XYZ trajectory (VASP-style).
+
+    Modes:
+    - Full trajectory parsing (with optional tqdm progress bar)
+    - Fast first/last frame extraction without scanning full file
+
+    Returns:
+        Positions : list[pd.DataFrame]
+        Energies  : pd.DataFrame
+        CellDim   : pd.DataFrame (first frame)
+    """
+    # --------------------------------------------------------------------------
+    # === Setup ===
+    if FilePath is None:
+        if WorkDir is None:
+            WorkDir = os.getcwd()
+        FilePath = os.path.join(WorkDir, "trajectory.xyz")
+
+    # --- Regex patterns ---
+    LatticeRegex = re.compile(r'Lattice="([^"]+)"')
+    TimeRegex = re.compile(r'Time_fs=([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)')
+    EnergyRegex = re.compile(r'Energy_eV=([+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)')
+
+    # --------------------------------------------------------------------------
+    # === Helper functions ===
+    def BuildCell(LatticeVals):
+        """Return both ndarray and DataFrame forms of the lattice."""
+        Mat = np.array([LatticeVals[0:3], LatticeVals[3:6], LatticeVals[6:9]], dtype=float)
+        return Mat, pd.DataFrame(Mat, columns=["x", "y", "z"])
+
+    def CartesianToDirect(Coords, Mat):
+        """Convert Cartesian coordinates to fractional using the lattice matrix."""
+        return Coords @ np.linalg.inv(Mat.T)
+
+    def ParseXYZFrame(Lines):
+        """Parse one XYZ frame (header + atoms)."""
+        NumAtoms = int(Lines[0].strip())
+        Header = Lines[1].strip()
+
+        # Metadata
+        Lattice = [float(x) for x in LatticeRegex.search(Header).group(1).split()]
+        Mat, CellDf = BuildCell(Lattice)
+        Time = float(TimeRegex.search(Header).group(1)) if TimeRegex.search(Header) else np.nan
+        Energy = float(EnergyRegex.search(Header).group(1)) if EnergyRegex.search(Header) else np.nan
+
+        # Atomic positions
+        AtomLines = Lines[2:2 + NumAtoms]
+        Elements, Coords = zip(*[(ln.split()[0], list(map(float, ln.split()[1:4]))) for ln in AtomLines])
+        Coords = np.array(Coords, dtype=float)
+        Frac = CartesianToDirect(Coords, Mat)
+
+        Pos = pd.DataFrame({"Element": pd.Categorical(Elements),
+                            "x": Frac[:, 0], "y": Frac[:, 1], "z": Frac[:, 2]})
+        return Pos, [Time, Energy], CellDf, Mat
+
+    def CountFrames(Path):
+        """Quickly count number of frames for tqdm."""
+        Count = 0
+        with open(Path) as f:
+            for line in f:
+                if line.strip().isdigit():
+                    Count += 1
+        return Count
+
+    # --------------------------------------------------------------------------
+    # === Fast path: first and last frame only ===
+    if ReadFirstAndLastOnly:
+        def ReadFirstFrame(Path):
+            with open(Path) as f:
+                N = int(f.readline().strip())
+                Lines = [str(N), f.readline()] + [f.readline() for _ in range(N)]
+            return ParseXYZFrame(Lines)
+
+        def ReadLastFrame(Path):
+            CHUNK_SIZE = 2 * 1024 * 1024  # 2 MB
+            Lines = []
+            with open(Path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                Size = f.tell()
+                Offset = 0
+                while Offset < Size:
+                    Offset = min(Size, Offset + CHUNK_SIZE)
+                    f.seek(Size - Offset)
+                    Chunk = f.read(CHUNK_SIZE)
+                    LinesChunk = Chunk.splitlines()
+                    Lines = LinesChunk + Lines
+                    for i, ln in enumerate(Lines):
+                        txt = ln.decode(errors="ignore").strip()
+                        if txt.isdigit():
+                            N = int(txt)
+                            if len(Lines) - i >= N + 2:
+                                Block = [L.decode(errors="ignore") for L in Lines[i:i + N + 2]]
+                                return ParseXYZFrame(Block)
+            raise ValueError("Last frame not found.")
+
+        FirstFrame, FirstE, CellDim, _ = ReadFirstFrame(FilePath)
+        LastFrame, LastE, _, _ = ReadLastFrame(FilePath)
+
+        Energies = pd.DataFrame([FirstE, LastE], columns=["Time (fs)", "Energy (eV)"])
+        return [FirstFrame, LastFrame], Energies, CellDim
+
+    # --------------------------------------------------------------------------
+    # === Full parsing path ===
+    TotalFrames = CountFrames(FilePath) if ShowProgress else None
+    Positions, EnergiesList = [], []
+    CellDim, FirstCell = None, None
+
+    with open(FilePath) as f, tqdm(total=TotalFrames, disable=not ShowProgress, desc="Parsing XYZ") as bar:
+        FrameIndex = 0
+        while True:
+            Line = f.readline()
+            if not Line:
+                break
+            if not Line.strip().isdigit():
+                continue
+
+            N = int(Line.strip())
+            Header = f.readline()
+            FrameLines = [Line, Header] + [f.readline() for _ in range(N)]
+            if len(FrameLines) < N + 2:
+                break
+
+            Pos, Energy, CellDf, Mat = ParseXYZFrame(FrameLines)
+
+            # Manage static cell logic
+            if FrameIndex == 0:
+                CellDim, FirstCell = CellDf, Mat
+            else:
+                if not AssumeStaticCell and np.linalg.norm(Mat - FirstCell) > CellChangeTolerance:
+                    FirstCell = Mat 
+
+            Positions.append(Pos)
+            EnergiesList.append(Energy)
+            FrameIndex += 1
+            if ShowProgress:
+                bar.update(1)
+
+    Energies = pd.DataFrame(EnergiesList, columns=["Time (fs)", "Energy (eV)"])
+    return Positions, Energies, CellDim
 
 
 def ContcarParser(WorkDir = None, GiveVelocities = False, ReadPOSCAR = False):
@@ -466,47 +618,3 @@ def WritePOSCAR(WorkDir, Position, CellDim, AtomInfo, Velocities = None):
 
 # %%
 
-
-#if __name__ == '__main__':
-    
-    
-    
-    #WorkDir = 'Dir_VolSearch_MLFF/1'
-    #WorkDir = os.getcwd()
-    #Position, _, CellDim = ContcarParser(WorkDir, False, True)
-    #Position = FixElementFormatting(Position)
-    #-------
-    
-    '''
-    WIP ScaleLength Determiner
-    
-    BondMatrix = an.CalculateScaleThickness(Position, CellDim, 1.75)
-    
-    #Filter to only Zr and O elements
-    OIndices = Position[Position['Element'] == 'O'].index
-    ZrIndices = Position[Position['Element'] == 'Zr'].index
-    
-    #Make mask for all Os bonded to Zrs
-    ScaleOIndex = []
-    for OIndex in OIndices:
-        for ZrIndex in ZrIndices:
-            if OIndex not in ScaleOIndex:
-                if BondMatrix[OIndex, ZrIndex] == 1:
-                    ScaleOIndex.append(OIndex)
-                
-    #Apply mask
-    ScaleOs = Position.loc[ScaleOIndex].sort_values(by = 'x')
-    
-    def FindScaleWidths(ScaleOs, Threshold = 0.05):
-    #how do we ensure consistency in the output of scale widths
-    #- Option 1: one scale is always close to x=1/0 and the other x=0.5-0.4
-        #Option 2: wait until 20 have absorbed and then do KMeans
-        #Too few oxygens to measure scale properly
-        if len(ScaleOs) <= 3:
-            return [0, 0] 
-        
-        
-        return 
-    '''
-    
-# %%
