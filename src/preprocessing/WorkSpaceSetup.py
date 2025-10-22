@@ -1,6 +1,5 @@
 # %%
 """
-
 This Code Will Set Up the Work Space according to the OxParams file.
 
 ====================================================
@@ -30,22 +29,21 @@ The following files must exist before running this script:
 """
 
 from pathlib import Path
-#import os
 import re
 import shutil
 import subprocess
 import sys
+from typing import Dict, List  # ✅ for 3.9-safe typing
 
-from pathlib import Path
-
-
+# --- Make imports location-independent ---
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
 import OxidationPreprocessing as opp
-#from workflow import OxidationAnalysis as an
+# from workflow import OxidationAnalysis as an
 
-def ReadOxParams(file_path: Path) -> dict:
+
+def ReadOxParams(file_path: Path) -> Dict[str, object]:
     """Parse key=value pairs from OxParams and convert to proper types."""
     if not file_path.exists():
         raise FileNotFoundError(f"Missing file: {file_path}")
@@ -92,24 +90,27 @@ def MakeFolderTag(folder_name: str) -> str:
 def UpdateJobName(job_content: str, folder_tag: str) -> str:
     """Replace the #SBATCH job name line with the folder tag."""
     pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", re.MULTILINE)
-    replacement = rf"\1'{folder_tag}'"
+    replacement = r"\1'{}'".format(folder_tag)
     if pattern.search(job_content):
         return pattern.sub(replacement, job_content)
-    return f"#SBATCH --job-name='{folder_tag}'\n{job_content}"
+    return "#SBATCH --job-name='{}'\n{}".format(folder_tag, job_content)
 
 
-def EnsureFilesExist(workdir: Path, filenames: list):
+def EnsureFilesExist(workdir: Path, filenames: List[str]):
+    """Check if required input files exist in workdir."""
     missing = [f for f in filenames if not (workdir / f).exists()]
     if missing:
         raise FileNotFoundError(f"Missing required files: {', '.join(missing)}")
 
 
 def CopyFile(src: Path, dst: Path):
+    """Copy a single file while ensuring destination directories exist."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 
 
 def PrepareWorkingDirectory():
+    """Main setup routine to prepare simulation directories."""
     workdir = Path.cwd()
     oxparams = ReadOxParams(workdir / "OxParams")
 
@@ -127,7 +128,7 @@ def PrepareWorkingDirectory():
 
     for temp in oxparams["Temperatures"]:
         for sim_idx in range(1, oxparams["NSims"] + 1):
-            folder_name = f"{temp}_{sim_idx}"
+            folder_name = "{}_{}".format(temp, sim_idx)
             sim_dir = workdir / folder_name
             sim_dir.mkdir(exist_ok=True)
 
@@ -163,7 +164,7 @@ def PrepareWorkingDirectory():
             for fn in ["POSCAR", "jobsub", "KPOINTS", "POTCAR", "job.in", "INCAR"]:
                 CopyFile(sim_dir / fn, vol_dir / fn)
 
-            # Submit job
+            # --- Job submission (currently disabled for safety) ---
             '''
             try:
                 proc = subprocess.run(
@@ -172,15 +173,15 @@ def PrepareWorkingDirectory():
                     capture_output=True,
                     text=True
                 )
-                log_lines.append(f"[{folder_name}] sbatch exit {proc.returncode}")
+                log_lines.append("[{}] sbatch exit {}".format(folder_name, proc.returncode))
                 if proc.stdout:
-                    log_lines.append(f"stdout: {proc.stdout.strip()}")
+                    log_lines.append("stdout: {}".format(proc.stdout.strip()))
                 if proc.stderr:
-                    log_lines.append(f"stderr: {proc.stderr.strip()}")
+                    log_lines.append("stderr: {}".format(proc.stderr.strip()))
             except FileNotFoundError:
-                log_lines.append(f"[{folder_name}] sbatch not found; skipped.")
+                log_lines.append("[{}] sbatch not found; skipped.".format(folder_name))
             '''
-            
+
     # xyz_files folder
     (workdir / "xyz_files").mkdir(exist_ok=True)
 

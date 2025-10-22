@@ -3,6 +3,7 @@
 import pandas as pd
 import sys
 from pathlib import Path
+from typing import Optional  # Added for Python 3.9 compatibility
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -128,6 +129,7 @@ def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
 
 # %% Demos and useful fileprep
 
+'''
 if __name__ == "__main__":
     
     Position, CellDim = vio.ReadPOSCAR(workdir = '../../Test/',
@@ -159,4 +161,6 @@ if __name__ == "__main__":
                     Position = Position,
                     CellDim = CellDim,
                     FileName = 'POSCAR_ZrCN_O2Placed')
+
+'''
 # %%
