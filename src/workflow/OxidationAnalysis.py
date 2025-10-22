@@ -11,6 +11,7 @@ import scipy.stats as stats
 import scipy.optimize as opt
 
 
+
 def ConvertDirectToCartesian(Position, CellDim):
     
     '''
@@ -413,51 +414,8 @@ def CalculateOxidationRate(N, t, CellDim, PartialPressure,
         return (OxRate, LowerBound, UpperBound)
 
 
-def FindNewCoord(Positions, CellDim, ReturnRadius = False):
-    
-    '''
-    Finds optimal Coordinates for the placement of a single new atom/molecule using 
-    a dual annealing optimiser. 
-    For multiple points global optimiser should be used instead.
-    
-    Args:
-        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
-            coordinates ('x', 'y', 'z').
-        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
-    
-    Returns:
-        OptimalCoords (np.array): Fractional coordinates of point furthest away
-            from each other atom. 
-    '''
-    
-    #Fractional boundaries applied
-    bounds = [(0, 1), (0, 1), (0, 1)]
-    
-    def ObjectiveFunction_MinimumDistance(NewPoint, FracCoords, CellDim):
-        #Finds the cartesian distance to the nearest neighbour from proposed point.
-        #Can be optimised by not calculating whole distance matrix.
-        #For current workload optimisation not needed (1-2 seconds).
-        
-        #Last point will always be proposed point for optimiser.    
-        FracCoords = np.append(FracCoords, [NewPoint], axis = 0)
-        NearestNeighbour = -np.sort(MinimumDistancePBCVectorised(FracCoords, 
-                                                                 CellDim)[-1])[1]
 
-        return NearestNeighbour
-    
-    FracCoords = Positions[['x', 'y', 'z']].to_numpy()
-    CellDim = CellDim.to_numpy()
-    
-    results = opt.dual_annealing(func = ObjectiveFunction_MinimumDistance, 
-                                 bounds = bounds,
-                                 args = (FracCoords, CellDim),
-                                 initial_temp = 2500,
-                                 maxiter = 500,
-                                 )
-    if ReturnRadius == True:
-        return results.x, results.fun
-    else:
-        return results.x
+
 
 
 def MaxwellBoltzmannVelocities(Elements, Temperature):
@@ -496,5 +454,212 @@ def MaxwellBoltzmannVelocities(Elements, Temperature):
 
 
 
-    
+#--- New Gen functions Here
+
+def FindOptimalCoords(Position: pd.DataFrame,
+                      CellDim: pd.DataFrame,
+                      n: int = 1,
+                      ReturnRadius: bool = False,
+                      Seed: int | None = None,
+                      MaxIterDE: int = 300,
+                      PopSizeDE: int = 15):
+    '''
+    Finds optimal fractional coordinates for the placement of n new atoms/molecules
+    inside a periodic cell, maximising the minimum Cartesian distance to existing
+    atoms (and to each other for n ≥ 2).
+
+    Args:
+        Position (pd.DataFrame): Atom positions with columns ['Element','x','y','z']
+            in fractional coordinates.
+        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in Ångström.
+        n (int): Number of new points to place.
+        ReturnRadius (bool): If True, also return the achieved minimum separation.
+        Seed (int, optional): Random seed for reproducibility.
+        MaxIterDE (int): Maximum iterations for differential evolution (n ≥ 2).
+        PopSizeDE (int): Population size multiplier for differential evolution (n ≥ 2).
+
+    Returns:
+        OptimalSites (pd.DataFrame): DataFrame of fractional coordinates ('x','y','z').
+        If ReturnRadius is True:
+            (OptimalSites, Radius)
+    '''
+
+    # ---------------- Helper Functions ---------------- #
+    def Wrap01(Array):
+        '''Map fractional coordinates to [0,1).'''
+        return Array - np.floor(Array)
+
+    def PBCDelta(FracA, FracB):
+        '''Minimal-image fractional delta under PBC.'''
+        Delta = FracA - FracB
+        return Delta - np.round(Delta)
+
+    def CartDistFromFracDelta(DeltaFrac, CellDimArray):
+        '''Convert fractional delta(s) to Cartesian and compute norms.'''
+        RCart = DeltaFrac @ CellDimArray
+        return np.linalg.norm(RCart, axis=-1)
+
+    def MinDistanceToExisting(PointsFrac, FracExisting, CellDimArray):
+        '''Minimum distance from each proposed point to existing atoms.'''
+        if FracExisting.size == 0:
+            return np.full(PointsFrac.shape[0], np.inf)
+        DFrac = PBCDelta(PointsFrac[:, None, :], FracExisting[None, :, :])
+        Dists = CartDistFromFracDelta(DFrac, CellDimArray)
+        return Dists.min(axis=1)
+
+    def MinPairwiseAmongNew(PointsFrac, CellDimArray):
+        '''Minimum distance among proposed new points themselves.'''
+        M = PointsFrac.shape[0]
+        if M < 2:
+            return np.inf
+        DFrac = PBCDelta(PointsFrac[:, None, :], PointsFrac[None, :, :])
+        Dists = CartDistFromFracDelta(DFrac, CellDimArray)
+        np.fill_diagonal(Dists, np.inf)
+        return Dists.min()
+
+    def Radius(PointsFrac, FracExisting, CellDimArray):
+        '''Minimum Cartesian distance to existing atoms and among new points.'''
+        PointsFrac = Wrap01(PointsFrac)
+        DistToExisting = MinDistanceToExisting(PointsFrac, FracExisting, CellDimArray)
+        R1 = float(DistToExisting.min()) if DistToExisting.size else np.inf
+        R2 = float(MinPairwiseAmongNew(PointsFrac, CellDimArray))
+        return min(R1, R2)
+
+    # ---------------- Input Validation ---------------- #
+    if not all(c in Position.columns for c in ['x','y','z']):
+        raise ValueError("Position must include columns ['x','y','z'].")
+    if not all(c in CellDim.columns for c in ['x','y','z']):
+        raise ValueError("CellDim must include columns ['x','y','z'].")
+
+    FracExisting = Position[['x','y','z']].to_numpy(float)
+    CellDimArray = CellDim[['x','y','z']].to_numpy(float)
+
+    # ---------------- Objective Functions ---------------- #
+    def ObjectiveSingle(Point):
+        Point = Wrap01(np.asarray(Point, dtype=float))
+        return -Radius(Point[None, :], FracExisting, CellDimArray)
+
+    def ObjectiveMultiple(FlatPoints):
+        PointsFrac = Wrap01(np.asarray(FlatPoints, dtype=float).reshape(n, 3))
+        return -Radius(PointsFrac, FracExisting, CellDimArray)
+
+    # ---------------- Optimisation ---------------- #
+    RNG = np.random.default_rng(Seed)
+
+    if n == 1:
+        # ---- Single point: cheap multi-start Powell optimisation ---- #
+        Seeds = [np.array([0.5, 0.5, 0.5])]
+        Seeds += list(RNG.random((7, 3)))  # Random initial guesses
+
+        BestPoint = None
+        BestVal = np.inf
+        for Start in Seeds:
+            Result = opt.minimize(
+                ObjectiveSingle,
+                x0=Start,
+                method='Powell',
+                options={'maxiter': 200, 'xtol': 1e-4, 'ftol': 1e-4},
+            )
+            if Result.fun < BestVal:
+                BestVal = Result.fun
+                BestPoint = Wrap01(Result.x)
+
+        OptimalSites = pd.DataFrame([BestPoint], columns=['x','y','z'])
+        RadiusValue = -float(BestVal)
+
+    else:
+        # ---- Multiple points: global optimisation (Differential Evolution) ---- #
+        Bounds = [(0.0, 1.0)] * (3 * n)
+        Result = opt.differential_evolution(
+            ObjectiveMultiple,
+            bounds=Bounds,
+            seed=Seed,
+            strategy='best1bin',
+            popsize=PopSizeDE,
+            maxiter=MaxIterDE,
+            mutation=(0.5, 1.0),
+            recombination=0.7,
+            polish=True,
+            updating='deferred',
+            workers=1,
+        )
+
+        OptimalPoints = Wrap01(Result.x.reshape(n, 3))
+        OptimalSites = pd.DataFrame(OptimalPoints, columns=['x','y','z'])
+        RadiusValue = -float(Result.fun)
+
+    # ---------------- Return ---------------- #
+    if ReturnRadius:
+        return OptimalSites, RadiusValue
+    else:
+        return OptimalSites
+
+
+def PlaceO2Molecules(Position: pd.DataFrame,
+                     CellDim: pd.DataFrame,
+                     NewSites: pd.DataFrame,
+                     BondLength: float = 1.2):
+    '''
+    Places O2 molecules aligned along the x-axis at specified fractional coordinates.
+
+    Each molecule is centered at the given fractional coordinate from NewSites
+    and consists of two O atoms separated by BondLength (Å) along the x-axis.
+
+    Args:
+        Position (pd.DataFrame): Existing atom positions with columns ['Element','x','y','z']
+            in fractional coordinates.
+        CellDim (pd.DataFrame): 3x3 DataFrame defining lattice vectors in Ångström.
+        NewSites (pd.DataFrame): Fractional coordinates ('x','y','z') where O2 molecules
+            should be centered.
+        BondLength (float): O–O bond length in Ångström.
+
+    Returns:
+        pd.DataFrame: Updated Positions DataFrame including added O atoms.
+    '''
+
+    # Validate inputs
+    for df, name in [(Position, "Positions"), (CellDim, "CellDim"), (NewSites, "NewSites")]:
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError(f"{name} must be a pandas DataFrame.")
+    if not all(c in Position.columns for c in ['x','y','z']):
+        raise ValueError("Positions must contain ['x','y','z'] columns.")
+    if not all(c in CellDim.columns for c in ['x','y','z']):
+        raise ValueError("CellDim must contain ['x','y','z'] columns.")
+    if not all(c in NewSites.columns for c in ['x','y','z']):
+        raise ValueError("NewSites must contain ['x','y','z'] columns.")
+
+    # Convert to numpy arrays
+    CellArray = CellDim[['x','y','z']].to_numpy(float)
+    NewSitesArray = NewSites[['x','y','z']].to_numpy(float)
+
+    # Compute x-axis lattice vector and its norm (Å)
+    AVector = CellArray[0, :]   # first lattice vector (x-axis)
+    ALength = np.linalg.norm(AVector)
+    if ALength == 0:
+        raise ValueError("Invalid CellDim: x lattice vector has zero length.")
+
+    # Bond displacement in fractional coordinates
+    HalfFracDisp = (BondLength / (2.0 * ALength))  # half bond in fractional units along x
+
+    # Prepare list for new O atoms
+    NewAtoms = []
+
+    for Site in NewSitesArray:
+        # Two atoms along ±x direction in fractional coordinates
+        O1 = Site.copy()
+        O2 = Site.copy()
+        O1[0] = (O1[0] - HalfFracDisp) % 1.0
+        O2[0] = (O2[0] + HalfFracDisp) % 1.0
+
+        NewAtoms.append({'Element': 'O', 'x': O1[0], 'y': O1[1], 'z': O1[2]})
+        NewAtoms.append({'Element': 'O', 'x': O2[0], 'y': O2[1], 'z': O2[2]})
+
+    # Convert to DataFrame
+    NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element','x','y','z'])
+
+    # Combine with existing positions
+    UpdatedPositions = pd.concat([Position, NewAtomsDF], ignore_index=True)
+
+    return UpdatedPositions
+
 # %%

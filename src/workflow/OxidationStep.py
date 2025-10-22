@@ -204,50 +204,72 @@ def PlaceO2(OptimalCoords, Positions, CellDim):
     return Positions
     
     
-def AddO2(Positions, Velocities, CellDim, Temperature):
-    
+def PlaceO2Molecules(Positions: pd.DataFrame,
+                     CellDim: pd.DataFrame,
+                     NewSites: pd.DataFrame,
+                     BondLength: float = 1.2):
     '''
-    Function to add single O2 molecule to position and Velocity dataframes.
-    
-    Location of atom will be furthest away from any nearest neighbours, and velocities
-    will be initialised via the MaxwellVoltzmann distribution.
-    
-    Args:
-        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            coordinates ('x', 'y', 'z').
-            Args:
-        Velocities (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            velocities in Å/fs ('vx', 'vy', 'vz').
-        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
-        Temperature (float): Temperature of the system in Kelvins
-            
-    Returns:
-        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            coordinates ('x', 'y', 'z'). Now with 2 added oxygen atoms.
-        Velocities (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            velocities in Å/fs ('vx', 'vy', 'vz'). Now with 2 added oxygen atoms.
-    '''
-    
-    OptimalCoords = an.FindNewCoord(Positions, CellDim)
-    Positions = PlaceO2(OptimalCoords, Positions, CellDim)
- 
-    NewOxVel = an.MaxwellBoltzmannVelocities(['O', 'O'], Temperature)
-    
-    #Starting velocities will always be heading towards negative surface 
-    NewOxVel = pd.DataFrame({'Element': ['O', 'O'],
-                             'vx': [NewOxVel[0][0], NewOxVel[1][0]],
-                             'vy': [NewOxVel[0][1], NewOxVel[1][1]],
-                             'vz': [NewOxVel[0][2], NewOxVel[1][2]]
-                             })
-    
-    #Add New Velocities
-    IndexLastO = len(Velocities.loc[Velocities['Element'] == 'O'].index)
-    Velocities = pd.concat([Velocities.iloc[:IndexLastO], 
-                            NewOxVel,
-                            Velocities.iloc[IndexLastO:]]).reset_index(drop = True)
-    
-    return Positions, Velocities
+    Places O2 molecules aligned along the x-axis at specified fractional coordinates.
 
+    Each molecule is centered at the given fractional coordinate from NewSites
+    and consists of two O atoms separated by BondLength (Å) along the x-axis.
+
+    Args:
+        Positions (pd.DataFrame): Existing atom positions with columns ['Element','x','y','z']
+            in fractional coordinates.
+        CellDim (pd.DataFrame): 3x3 DataFrame defining lattice vectors in Ångström.
+        NewSites (pd.DataFrame): Fractional coordinates ('x','y','z') where O2 molecules
+            should be centered.
+        BondLength (float): O–O bond length in Ångström.
+
+    Returns:
+        pd.DataFrame: Updated Positions DataFrame including added O atoms.
+    '''
+
+    # Validate inputs
+    for df, name in [(Positions, "Positions"), (CellDim, "CellDim"), (NewSites, "NewSites")]:
+        if not isinstance(df, pd.DataFrame):
+            raise TypeError(f"{name} must be a pandas DataFrame.")
+    if not all(c in Positions.columns for c in ['x','y','z']):
+        raise ValueError("Positions must contain ['x','y','z'] columns.")
+    if not all(c in CellDim.columns for c in ['x','y','z']):
+        raise ValueError("CellDim must contain ['x','y','z'] columns.")
+    if not all(c in NewSites.columns for c in ['x','y','z']):
+        raise ValueError("NewSites must contain ['x','y','z'] columns.")
+
+    # Convert to numpy arrays
+    CellArray = CellDim[['x','y','z']].to_numpy(float)
+    NewSitesArray = NewSites[['x','y','z']].to_numpy(float)
+
+    # Compute x-axis lattice vector and its norm (Å)
+    AVector = CellArray[0, :]   # first lattice vector (x-axis)
+    ALength = np.linalg.norm(AVector)
+    if ALength == 0:
+        raise ValueError("Invalid CellDim: x lattice vector has zero length.")
+
+    # Bond displacement in fractional coordinates
+    HalfFracDisp = (BondLength / (2.0 * ALength))  # half bond in fractional units along x
+
+    # Prepare list for new O atoms
+    NewAtoms = []
+
+    for Site in NewSitesArray:
+        # Two atoms along ±x direction in fractional coordinates
+        O1 = Site.copy()
+        O2 = Site.copy()
+        O1[0] = (O1[0] - HalfFracDisp) % 1.0
+        O2[0] = (O2[0] + HalfFracDisp) % 1.0
+
+        NewAtoms.append({'Element': 'O', 'x': O1[0], 'y': O1[1], 'z': O1[2]})
+        NewAtoms.append({'Element': 'O', 'x': O2[0], 'y': O2[1], 'z': O2[2]})
+
+    # Convert to DataFrame
+    NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element','x','y','z'])
+
+    # Combine with existing positions
+    UpdatedPositions = pd.concat([Positions, NewAtomsDF], ignore_index=True)
+
+    return UpdatedPositions
 
 def CalculateVolumeRatio(WorkDir, CurrentGasVolume):
     #Calculate the ratio of starting volume (For which OTol was set) to current 
