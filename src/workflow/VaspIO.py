@@ -7,7 +7,10 @@ import os
 from tqdm import tqdm
 import re
 
-import OxidationAnalysis as an
+from pathlib import Path
+from typing import Optional, Tuple
+
+from workflow import OxidationAnalysis as an
 
 
 
@@ -216,114 +219,156 @@ def XYZTrajectoryParser(FilePath=None,
     return Positions, Energies, CellDim
 
 
-def ContcarParser(WorkDir = None, GiveVelocities = False, ReadPOSCAR = False):
-    
-    '''
-    Parses a CONTCAR or POSCAR file and extracts structural information.
+
+def ReadPOSCAR(
+    workdir: Optional[str] = None,
+    filename: Optional[str] = None,
+    give_velocities: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Read a VASP POSCAR/CONTCAR-like file and return:
+      - Position: DataFrame with columns ['Element', 'x', 'y', 'z'] (fractional)
+      - CellDim:  DataFrame with columns ['x', 'y', 'z'] (cartesian lattice vectors)
+    If give_velocities=True, also returns Velocities: DataFrame with ['Element','vx','vy','vz'].
 
     Args:
-        WorkDir (str, optional): Absolute path to the directory containing the POSCAR.
-            If None, the current working directory is used.
-        GiveVelocities (bool, optional): Whether to return the Velocities DataFrame.
-        ReadPOSCAR (bool, optional): If True, reads a POSCAR file instead of CONTCAR.
+        workdir: Directory to search in (defaults to current working directory).
+        filename: Explicit filename to read. If None, uses 'POSCAR' in workdir,
+                  and if that does not exist, falls back to 'CONTCAR'.
+        give_velocities: Try to parse N velocity lines (after positions). Default False.
 
     Returns:
-        list: A list containing the following elements:
-            1. pd.DataFrame: Atom positions with 'Element' and fractional coordinates ('x', 'y', 'z').
-            2. pd.DataFrame: AtomInfo, a 2xN DataFrame showing elements and their counts.
-            3. pd.DataFrame: CellDim, a 3x3 DataFrame defining cell dimensions in angstroms.
-            4. (Optional) pd.DataFrame: Velocities, with 'Element', 'vx', 'vy', and 'vz'.
-
-    Notes:
-        The order of returned elements depends on the boolean flags.
-    '''
-    
-    #Helper function to find the next non-empty line in the POS/CONTCAR
-    def NextNonEmpty(idx, Lines):
-        while idx < len(Lines) and not Lines[idx].strip():
+        (Position, CellDim) or (Position, CellDim, Velocities)
+    """
+    # -------- helpers --------
+    def next_nonempty(idx: int, lines: list[str]) -> int:
+        while idx < len(lines) and not lines[idx].strip():
             idx += 1
         return idx
-    
-    #Assume current dir is workdir
-    if WorkDir == None:
-        WorkDir = os.getcwd()
-        
-    #Create file path ot CONT or POS
-    FilePath = os.path.join(WorkDir, 'CONTCAR')
-    if ReadPOSCAR == True:
-        try:
-            FilePath = os.path.join(WorkDir, 'POSCAR')
-        except:
-            FilePath = os.path.join(WorkDir, 'CONTCAR')
 
-    #Read lines and remove trailing spaces and well as any inital blank spaces
-    with open(FilePath, 'r') as f:
-        Lines = [Line.rstrip() for Line in f] 
-    Lines = Lines[NextNonEmpty(0, Lines):]
+    def parse_three_floats(line: str) -> list[float]:
+        vals = []
+        for tok in line.split():
+            try:
+                vals.append(float(tok))
+                if len(vals) == 3:
+                    break
+            except ValueError:
+                # ignore flags like T/F or comments
+                continue
+        if len(vals) != 3:
+            raise ValueError(f"Could not parse 3 numeric coords from line: {line!r}")
+        return vals
 
-    #Read Scale Factor and CellDim
-    idx = NextNonEmpty(1, Lines)
-    ScaleFactor = float(Lines[idx].strip())
-    idx = NextNonEmpty(idx + 1, Lines)
-    CellDim = []
-    for _ in range(3):
-        Dimension = [float(x) * ScaleFactor for x in Lines[idx].split()]
-        CellDim.append(Dimension)
-        idx += 1
-    CellDim = pd.DataFrame(CellDim, columns=['x', 'y', 'z'])
+    def expand_elements(elem_line: list[str], num_line: list[str]) -> list[str]:
+        out = []
+        for el, n in zip(elem_line, num_line):
+            out.extend([el] * int(n))
+        return out
 
-    #Read element and number lines, put into AtomInfo
-    idx = NextNonEmpty(idx, Lines)
-    ElemLine = Lines[idx].split()
-    idx = NextNonEmpty(idx + 1, Lines)
-    NumLine = Lines[idx].split()
-    AtomInfo = pd.DataFrame([ElemLine, NumLine], index=['Element', 'Number']).T
-    AtomInfo['Number'] = AtomInfo['Number'].astype(int)
-    
-    #Read line with coordinate system ("Direct" or "Cartesian"). If Cartesian flag for conversion later.
-    idx = NextNonEmpty(idx + 1, Lines)
-    if Lines[idx].lower()[0] == 'c':
-        CartesianFlag = True
+    def cart_to_frac(cart: np.ndarray, cell: np.ndarray) -> np.ndarray:
+        # cell is 3x3 with rows = lattice vectors as given in POSCAR
+        # r_frac satisfies r_cart = r_frac @ cell  =>  r_frac = r_cart @ inv(cell)
+        inv_cell = np.linalg.inv(cell)
+        return cart @ inv_cell
+
+    # -------- locate file --------
+    base = Path(workdir) if workdir is not None else Path.cwd()
+    if filename is None:
+        path = base / "POSCAR"
+        if not path.exists():
+            # gentle fallback for convenience
+            alt = base / "CONTCAR"
+            if alt.exists():
+                path = alt
+            else:
+                raise FileNotFoundError(f"No POSCAR or CONTCAR found in {base}")
     else:
-        CartesianFlag = False
+        p = Path(filename)
+        path = p if p.is_absolute() else (base / p)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
 
-    #Read atomic coordinates
-    idx = NextNonEmpty(idx + 1, Lines)
-    Positions = []
-    while idx < len(Lines) and Lines[idx].strip():
-        Positions.append([float(x) for x in Lines[idx].split()[:3]])
+    # -------- read & trim --------
+    with path.open("r", encoding="utf-8") as f:
+        lines = [ln.rstrip() for ln in f]
+    start = next_nonempty(0, lines)
+    lines = lines[start:]
+
+    # Title (ignore), scale, cell
+    # title:
+    idx = next_nonempty(1, lines)  # scale is usually line 1
+    scale = float(lines[idx].split()[0])
+    idx = next_nonempty(idx + 1, lines)
+
+    cell_rows = []
+    for _ in range(3):
+        cell_rows.append([float(x) * scale for x in lines[idx].split()[:3]])
         idx += 1
-    Positions = pd.DataFrame(Positions, columns = ['x', 'y', 'z'])
-    Positions = AddElementsToPos(Positions, AtomInfo)
+    cell = np.array(cell_rows, dtype=float)  # 3x3
+    CellDim = pd.DataFrame(cell_rows, columns=["x", "y", "z"])
 
-    #Convert Cartesian to Direct Coordinates
-    if CartesianFlag:
-        Positions = an.ConvertCartesianToDirect(Positions, CellDim)
-    
-    returns = [Positions, AtomInfo, CellDim]
-    
-    #If requested, attempt to read velocities
-    if GiveVelocities:
-        
-        idx = NextNonEmpty(idx, Lines)
-        Velocities = []
-        
-        #Keep reading velocity lines until empty line is encountered or end of file is reached.
-        while idx < len(Lines) and Lines[idx].strip():
-            Velocities.append([float(x) for x in Lines[idx].split()[:3]])
-            idx = idx + 1
+    # Element symbols + counts
+    idx = next_nonempty(idx, lines)
+    elem_line = lines[idx].split()
+    idx = next_nonempty(idx + 1, lines)
+    num_line = lines[idx].split()
+    counts = [int(x) for x in num_line]
+    n_atoms = sum(counts)
+    elements_expanded = expand_elements(elem_line, num_line)
 
-        #If Positions match velocities, great. Else something has gone wrong. Omit velocities.
-        if len(Velocities) == len(Positions):
-            Velocities = pd.DataFrame(Velocities, columns = ['vx', 'vy', 'vz'])
-            Velocities = AddElementsToPos(Velocities, AtomInfo)
-        else:
-            print('Number of Velocity lines do not match Position lines')
-            Velocities = None
+    # Coordinate header (Selective Dynamics optional)
+    idx = next_nonempty(idx + 1, lines)
+    header = lines[idx].strip().lower()
+    if header.startswith("s"):  # "Selective dynamics"
+        idx = next_nonempty(idx + 1, lines)
+        header = lines[idx].strip().lower()
 
-        returns.append(Velocities)
+    if header.startswith("c"):  # Cartesian
+        is_cart = True
+    else:                        # "Direct" assumed if not Cartesian
+        is_cart = False
 
-    return returns
+    # Positions: read exactly n_atoms lines (more robust than 'until blank')
+    idx = next_nonempty(idx + 1, lines)
+    coords = []
+    for _ in range(n_atoms):
+        if idx >= len(lines):
+            raise ValueError("Unexpected end of file while reading positions.")
+        coords.append(parse_three_floats(lines[idx]))
+        idx += 1
+    coords = np.array(coords, dtype=float)
+
+    # Convert to fractional if needed
+    if is_cart:
+        frac = cart_to_frac(coords, cell)
+    else:
+        frac = coords
+
+    Position = pd.DataFrame(frac, columns=["x", "y", "z"])
+    Position.insert(0, "Element", elements_expanded)
+
+    if not give_velocities:
+        return Position, CellDim
+
+    # ---- optional velocities (try to parse next n_atoms lines of 3 floats) ----
+    idx = next_nonempty(idx, lines)
+    vels = []
+    for _ in range(n_atoms):
+        if idx >= len(lines) or not lines[idx].strip():
+            break
+        try:
+            vels.append(parse_three_floats(lines[idx]))
+        except ValueError:
+            break
+        idx += 1
+
+    Velocities = None
+    if len(vels) == n_atoms:
+        Velocities = pd.DataFrame(vels, columns=["vx", "vy", "vz"])
+        Velocities.insert(0, "Element", elements_expanded)
+
+    return (Position, CellDim, Velocities) if Velocities is not None else (Position, CellDim)
 
 
 def INCARParser(WorkDir = None, Parameters = ['TEBEG', 'POTIM', 'NSW'], FilePath = None):
@@ -530,91 +575,92 @@ def VolSearchParser(WorkDir = None):
     
     return AllPositions, AllEnergies
     
-    
-def WritePOSCAR(WorkDir, Position, CellDim, AtomInfo, Velocities = None):
 
+
+def WritePOSCAR(
+    workdir: str,
+    Position: pd.DataFrame,
+    CellDim: pd.DataFrame,
+    Velocities: pd.DataFrame = None,
+    filename: str = None,
+    title: str = "Structure generated by WritePOSCAR",
+):
     """
-    Creates a POSCAR file for VASP calculations in the specified directory.
-
-    This function generates a POSCAR file using the provided atomic positions, 
-    cell dimensions, and atomic composition. If velocities are provided, they 
-    will also be included in the output file.
+    Writes a VASP-format POSCAR (or CONTCAR-like) file using Position and CellDim.
 
     Args:
-        WorkDir (str): Path to the directory where the new POSCAR file must be saved.
-        Position (pd.DataFrame): DataFrame containing atom positions with columns: 
-            'Element', 'x', 'y', and 'z' (fractional coordinates).
-        CellDim (pd.DataFrame): 3x3 DataFrame defining cell dimensions in angstroms.
-        AtomInfo (pd.DataFrame): 2xN DataFrame listing element types and their counts 
-            in the simulation cell. Order matters.
-        Velocities (pd.DataFrame, optional): DataFrame containing atomic velocities 
-            with columns: 'Element', 'vx', 'vy', and 'vz'.
+        workdir (str): Directory where the POSCAR should be written.
+        Position (pd.DataFrame): DataFrame with columns ['Element', 'x', 'y', 'z']
+            in fractional coordinates.
+        CellDim (pd.DataFrame): 3x3 DataFrame defining lattice vectors (in Å).
+        Velocities (pd.DataFrame, optional): DataFrame with columns
+            ['Element', 'vx', 'vy', 'vz'].
+        filename (str, optional): Output file name. Defaults to "POSCAR".
+        title (str, optional): Title line for the POSCAR header.
 
     Returns:
-        None: The function writes the POSCAR file directly to disk.
-
-    Raises:
-        FileNotFoundError: If the specified WorkDir does not exist and cannot be created.
-        ValueError: If the input DataFrames do not conform to the expected structure.
+        None
     """
-    
-    #Check for Directory
-    if not os.path.exists(WorkDir):
-        os.makedirs(WorkDir)
-    
-    #Boilerplate
-    FileName = os.path.join(WorkDir, "POSCAR")
-    Title = 'Structure (CO(2) Removed) by SLUSCHI'
-    ScaleFactor = 1.0
-    
-    #Reorder Position to match the element order given in AtomInfo 
-    #(which was set in first POSCAR read)
-    OrderedPositions = []
-    for _, row in AtomInfo.iterrows():
-        Element = row['Element']
-        Count = row['Number']
-        Subset = Position[Position['Element'] == Element].iloc[:Count]
-        OrderedPositions.append(Subset)
-    OrderedPositions = pd.concat(OrderedPositions, ignore_index=True)
+    # ---- Setup and validation ----
+    if not os.path.exists(workdir):
+        os.makedirs(workdir)
 
-    #Prepare formatting for Element and Number of element line.
-    MaxLenElement = max(len(e) for e in AtomInfo['Element'])
-    MaxLenNumber = max(len(str(n)) for n in AtomInfo['Number'])
-    ElementLine = "    ".join(e.ljust(MaxLenElement) for e in AtomInfo['Element'])
-    NumberLine =  "    ".join(str(n).rjust(MaxLenNumber) for n in AtomInfo['Number'])
+    if filename is None:
+        filename = "POSCAR"
+    filepath = os.path.join(workdir, filename)
 
-    #Start Writing the POSCAR file
-    with open(FileName, 'w') as f:
-        
-        #Boilerplate
-        f.write(f"{Title}\n") #Title
-        f.write(f"{ScaleFactor}\n") #Scale
-        for i in range(3): #Cell Dimensions
-            f.write(f"{CellDim.iloc[i]['x']:22.16f} {CellDim.iloc[i]['y']:22.16f} {CellDim.iloc[i]['z']:22.16f}\n")
-        f.write(f"    {ElementLine}\n") #Element
-        f.write(f"    {NumberLine}\n") #Number of Atoms per element
+    required_cols = {"Element", "x", "y", "z"}
+    if not required_cols.issubset(Position.columns):
+        raise ValueError(f"Position DataFrame must contain columns: {required_cols}")
+
+    if not {"x", "y", "z"}.issubset(CellDim.columns) or len(CellDim) != 3:
+        raise ValueError("CellDim must be a 3x3 DataFrame with columns ['x','y','z'].")
+
+    # ---- Infer composition ----
+    atom_counts = Position["Element"].value_counts(sort=False)
+    element_order = list(atom_counts.index)
+
+    # ---- Write POSCAR ----
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"{title}\n")
+        f.write("1.0\n")  # scale factor
+
+        # lattice vectors
+        for i in range(3):
+            f.write(
+                f"{CellDim.iloc[i]['x']:22.16f} "
+                f"{CellDim.iloc[i]['y']:22.16f} "
+                f"{CellDim.iloc[i]['z']:22.16f}\n"
+            )
+
+        # element and counts lines
+        f.write("   " + "   ".join(element_order) + "\n")
+        f.write("   " + "   ".join(str(atom_counts[e]) for e in element_order) + "\n")
         f.write("Direct\n")
-        
-        #Write Atomic positions
-        for _, Atom in OrderedPositions.iterrows():
-            f.write(f"{Atom['x']:22.16f} {Atom['y']:22.16f} {Atom['z']:22.16f}\n")
 
-        if Velocities is not None:
-            
-            #Reorder Velocities to match the element order given in AtomInfo
-            OrderedVelocities = []
-            for _, row in AtomInfo.iterrows():
-                Element = row['Element']
-                Count = row['Number']
-                Subset = Velocities[Velocities['Element'] == Element].iloc[:Count]
-                OrderedVelocities.append(Subset)
-            OrderedVelocities = pd.concat(OrderedVelocities, ignore_index=True)
-            
-            #Write Velocities
+        # positions, grouped by element for readability
+        for elem in element_order:
+            subset = Position[Position["Element"] == elem]
+            for _, atom in subset.iterrows():
+                f.write(
+                    f"{atom['x']:22.16f} "
+                    f"{atom['y']:22.16f} "
+                    f"{atom['z']:22.16f}\n"
+                )
+
+        # optional velocities section
+        if Velocities is not None and not Velocities.empty:
             f.write("\n")
-            for _, v in OrderedVelocities.iterrows():
-                f.write(f"{v['vx']:22.16f} {v['vy']:22.16f} {v['vz']:22.16f}\n")
+            for elem in element_order:
+                subset = Velocities[Velocities["Element"] == elem]
+                for _, v in subset.iterrows():
+                    f.write(
+                        f"{v['vx']:22.16f} "
+                        f"{v['vy']:22.16f} "
+                        f"{v['vz']:22.16f}\n"
+                    )
 
+    return
 
 # %%
 

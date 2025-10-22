@@ -133,7 +133,6 @@ def FindConnectedSubcomponents(AdjacencyMatrix):
     return Subcomponents
 
 
-
 def FindGases(Position, 
               CellDim, 
               Targets = [['C','O','O'], ['C','O'], ['O','O']],

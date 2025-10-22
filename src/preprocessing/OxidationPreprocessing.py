@@ -1,12 +1,20 @@
-#%%
-import numpy as np
-import pandas as pd
-from ..workflow import VaspIO as vp
-from ..workflow import OxidationAnalysis as an
+#%% Imports 
 
-from scipy.optimize import differential_evolution
-from pymatgen.core import Structure, Lattice
-from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+import pandas as pd
+import numpy as np
+import sys
+import os
+
+sys.path.append('..')
+
+from workflow import VaspIO as vio
+
+
+#from ..workflow import OxidationAnalysis as an
+
+#from scipy.optimize import differential_evolution
+#from pymatgen.core import Structure, Lattice
+#from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 #Give this script a POSCAR file, and it will turn it into an oxidation ready
 #struct. Messy for now.
@@ -17,10 +25,14 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 #Move these to PreProcessing. no longer needed here
 #------------------------------------------------------------------------------
 
+'''
+
+
+
 def SwapAxes(Positions, CellDim, Axes):
-    '''
+
     Swap two axes in the Positions and CellDim DataFrames.
-    '''
+
     
     Positions_swapped = Positions.copy()
     Positions_swapped[Axes[0], Axes[1]] = Positions[Axes[1]], Positions[Axes[0]]
@@ -357,8 +369,8 @@ def PivotAxis(Positions, CellDim, AtomInfo):
 
 
 
-if __name__ == "__main__":
-    print(vp.__file__)
+#if __name__ == "__main__":
+    #print(vp.__file__)
     #WorkDir = "Structures/ZrC75N25" 
     #PoscarPath = "Structures/ZrC75N25/ZrCN.poscar"  # Modify with your POSCAR file path
     #supercell_matrix = [3, 2, 2]  # Expand to 4x3x3 supercell
@@ -390,7 +402,7 @@ if __name__ == "__main__":
     
     #print('Done')
     
-    '''
+
     
 
     #with pd.option_context('display.max_rows', None, 'display.max_columns', None):  # more options can be specified also
@@ -407,8 +419,100 @@ if __name__ == "__main__":
     
     print('Done')
     #Next, add O2 atoms
+
+    
+'''
+
+def SwapAxes(Positions: pd.DataFrame, CellDim: pd.DataFrame, Axes=('x', 'z')):
+    '''
+    Helper function for swapping axes in Positions (fractional coordinates)
+    and CellDim (Cartesian lattice vectors).
+
+    Args:
+        Positions : pd.DataFrame
+            Must include columns ['Element', 'x', 'y', 'z'] (fractional coords).
+        CellDim : pd.DataFrame
+            Must include columns ['x', 'y', 'z'] (Cartesian lattice vectors, rows = a1,a2,a3).
+        Axes : tuple[str, str]
+            Pair of axes to swap, e.g. ('x','z') or ('y','z').
+
+    Returns:
+        (Positions_swapped, CellDim_swapped)
+    '''
+    Axes = tuple(Axes)
+    if len(Axes) != 2:
+        raise ValueError("Axes must be a tuple of two elements, e.g. ('x','z').")
+
+    valid_axes = ['x', 'y', 'z']
+    if any(ax not in valid_axes for ax in Axes):
+        raise ValueError("Axes must be from ['x','y','z'].")
+
+    # Create a mapping for axis reordering
+    order = valid_axes.copy()
+    i, j = order.index(Axes[0]), order.index(Axes[1])
+    order[i], order[j] = order[j], order[i]
+
+    # --- Swap CellDim rows ---
+    CellDim_swapped = CellDim.loc[:, order].copy()
+    CellDim_swapped = CellDim_swapped.reindex([valid_axes.index(ax) for ax in order]).reset_index(drop=True)
+    CellDim_swapped.columns = ['x','y','z']
+
+    # --- Swap Positions fractional coordinates ---
+    frac = Positions[['x','y','z']].values
+    frac_swapped = frac[:, [valid_axes.index(ax) for ax in order]]
+
+    Positions_swapped = Positions.copy()
+    Positions_swapped[['x','y','z']] = frac_swapped
+
+    return Positions_swapped, CellDim_swapped
+
+
+def CreateSupercell(Position, CellDim, SupercellMatrix):
+    '''
+    Function which creates a supercell based on the SupercellMatrix.
     '''
     
-    
+    return Position, CellDim
 
+def FindOptimalPositions(Position, CellDim, n):
+    '''
+    Function which finds optimal positions for n new gas molecules.
+    Uses a global optimiser to find positions maximising distance to existing atoms.
+    '''
+    
+    return Position
+    
+    
+def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
+    '''
+    Function which prepares the POSCAR for oxidation simulations.
+    Expands the x-dimension by GasRatio and scales fractional positions.
+    Also places InitO2 O2 molecules in optimal positions.
+    Does not do supercell expansion, seperate helper functin can be used for that.
+    
+    '''
+    
+    #First expand the x-dimension by GasRatio and scale fractional positions
+     
+     
+    
+    return Position, CellDim
+
+# %% Demos and useful fileprep
+
+if __name__ == "__main__":
+    
+    Position, CellDim = vio.ReadPOSCAR(workdir = '../../Test/',
+                                       filename ='POSCAR_ZrCN_NoGas')
+    
+    print(Position)
+    print(CellDim)
+    
+    Position, CellDim = SwapAxes(Position, CellDim, Axes = ('x','z'))
+    
+    print(Position)
+    print(CellDim)
+    
+    vio.WritePOSCAR(WorkDir = '../../Test/',
+    
 # %%

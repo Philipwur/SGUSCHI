@@ -7,8 +7,8 @@ import numpy as np
 import pandas as pd
 import shutil
 
-import VaspIO as vio
-import OxidationAnalysis as an
+from workflow import VaspIO as vio
+from workflow import OxidationAnalysis as an
 
 def ReadOxParams(WorkDir = None, Paramereters = None):
     
