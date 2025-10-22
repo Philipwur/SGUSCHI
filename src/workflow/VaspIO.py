@@ -9,11 +9,11 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple
-
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 from workflow import OxidationAnalysis as an
 
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 
 
 def FixElementFormatting(Position, ReturnPrevNames = False):
