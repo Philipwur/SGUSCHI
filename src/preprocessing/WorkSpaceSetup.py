@@ -1,7 +1,33 @@
-# This Code Will Set Up the Work Space according to the OxParams file.
+# %%
+"""
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+This Code Will Set Up the Work Space according to the OxParams file.
+
+====================================================
+Workplace Requirements for Working Directory Script
+====================================================
+
+FILES REQUIRED IN WORKING DIRECTORY
+-----------------------------------
+The following files must exist before running this script:
+
+1. OxParams        → Contains simulation parameters with keys:
+                     - AtomicRadiusTol
+                     - TargetPP
+                     - PPSmoothing
+                     - InitO2
+                     - GasRatio
+                     - Temperatures
+                     - NSims
+2. POSCAR          → Base structure file (Supercell Expanded)
+3. KPOINTS         → VASP KPOINTS input
+4. POTCAR          → VASP pseudopotentials (Same order as POSCAR + O Last)
+5. INCAR           → VASP INCAR input
+6. job.in          → SLUSCHI job file
+7. jobsub          → SLURM job submission script
+8. IonicRadii      → File containing ionic radii for elements
+9. jobsub_master   → Master process slurm job submission script
+"""
 
 from pathlib import Path
 #import os
@@ -13,227 +39,151 @@ import sys
 sys.path.append('..')
 
 from workflow import VaspIO as vio
-from workflow import OxidationAnalysis as an
+import OxidationPreprocessing as opp
+#from workflow import OxidationAnalysis as an
 
-import OxidationPrepocessing as opp
+def ReadOxParams(file_path: Path) -> dict:
+    """Parse key=value pairs from OxParams and convert to proper types."""
+    if not file_path.exists():
+        raise FileNotFoundError(f"Missing file: {file_path}")
 
-
-def ReadOxParams(FilePath: Path) -> dict:
-    """
-    Parse OxParams key=value lines. Accepts comma- or space-separated temperature lists.
-    Required keys for this workflow: Temperatures, NSims, GasRatio, InitO2.
-    """
-    if not FilePath.exists():
-        raise FileNotFoundError(f"OxParams not found at: {FilePath}")
-
-    Params = {}
-    with FilePath.open("r", encoding="utf-8") as F:
-        for Line in F:
-            Line = Line.strip()
-            if not Line or Line.startswith("#") or "=" not in Line:
+    params = {}
+    with file_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
                 continue
-            Key, Val = [x.strip() for x in Line.split("=", 1)]
-            Params[Key] = Val
+            key, val = [x.strip() for x in line.split("=", 1)]
+            params[key] = val
 
-    # Normalize & type-cast the inputs we need
-    if "Temperatures" not in Params or not Params["Temperatures"]:
-        raise ValueError("Temperatures must be provided in OxParams (comma- or space-separated).")
-    TempsRaw = Params["Temperatures"]
-    if "," in TempsRaw:
-        Temperatures = [t.strip() for t in TempsRaw.split(",") if t.strip()]
+    # Required fields
+    required = ["Temperatures", "NSims", "GasRatio", "InitO2"]
+    for key in required:
+        if key not in params or not params[key]:
+            raise ValueError(f"'{key}' missing in OxParams")
+
+    # Type conversions
+    temps_raw = params["Temperatures"]
+    if "," in temps_raw:
+        temperatures = [t.strip() for t in temps_raw.split(",") if t.strip()]
     else:
-        Temperatures = [t for t in TempsRaw.split() if t]
+        temperatures = [t for t in temps_raw.split() if t]
 
-    if "NSims" not in Params or not Params["NSims"]:
-        raise ValueError("NSims must be provided in OxParams.")
-    try:
-        NSims = int(Params["NSims"])
-    except ValueError as E:
-        raise ValueError("NSims must be an integer.") from E
-
-    if "GasRatio" not in Params or not Params["GasRatio"]:
-        raise ValueError("GasRatio must be provided in OxParams.")
-    try:
-        GasRatio = float(Params["GasRatio"])
-    except ValueError as E:
-        raise ValueError("GasRatio must be a float.") from E
-
-    if "InitO2" not in Params or not Params["InitO2"]:
-        raise ValueError("InitO2 must be provided in OxParams.")
-    try:
-        InitO2 = int(Params["InitO2"])
-    except ValueError as E:
-        raise ValueError("InitO2 must be an integer.") from E
-
-    ParamsOut = {
-        "Temperatures": Temperatures,
-        "NSims": NSims,
-        "GasRatio": GasRatio,
-        "InitO2": InitO2,
+    params_out = {
+        "Temperatures": temperatures,
+        "NSims": int(params["NSims"]),
+        "GasRatio": float(params["GasRatio"]),
+        "InitO2": int(params["InitO2"]),
     }
-    return ParamsOut
+    return params_out
 
 
-def MakeFolderTag(FolderName: str) -> str:
-    """
-    Convert '{Temperature}_{NSim}' -> '{Temperature}_s_{NSim}' for job name.
-    """
-    Parts = FolderName.split("_", 1)
-    if len(Parts) == 2:
-        return f"{Parts[0]}_s_{Parts[1]}"
-    # Fallback if unexpected format
-    return f"{FolderName}_s"
+def MakeFolderTag(folder_name: str) -> str:
+    """Convert '873_2' → '873_s_2' for job name."""
+    parts = folder_name.split("_", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}_s_{parts[1]}"
+    return f"{folder_name}_s"
 
 
-def UpdateJobNameInContent(JobsubContent: str, FolderTag: str) -> str:
-    """
-    Replace a '#SBATCH --job-name=...' line with one matching the folder tag.
-    Keeps single-quote style as in your example.
-    """
-    Pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", flags=re.MULTILINE)
-    Replacement = rf"\1'{FolderTag}'"
-    if Pattern.search(JobsubContent):
-        return Pattern.sub(Replacement, JobsubContent)
-    # If not found, append a job-name line near the top to be safe.
-    Lines = JobsubContent.splitlines()
-    InsertAt = 0
-    Lines.insert(InsertAt, f"#SBATCH --job-name='{FolderTag}'")
-    return "\n".join(Lines) + ("\n" if not JobsubContent.endswith("\n") else "")
+def UpdateJobName(job_content: str, folder_tag: str) -> str:
+    """Replace the #SBATCH job name line with the folder tag."""
+    pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", re.MULTILINE)
+    replacement = rf"\1'{folder_tag}'"
+    if pattern.search(job_content):
+        return pattern.sub(replacement, job_content)
+    return f"#SBATCH --job-name='{folder_tag}'\n{job_content}"
 
 
-def ReadPOSCARWithVaspIO(PoscarPath: Path):
-    """
-    Load POSCAR using a VaspIO function. Tries common function names.
-    Expected return: (Position, CellDim)
-    """
-    if hasattr(vio, "ReadPOSCAR"):
-        return vio.ReadPOSCAR(str(PoscarPath))
-    if hasattr(vio, "LoadPOSCAR"):
-        return vio.LoadPOSCAR(str(PoscarPath))
-    if hasattr(vio, "GetPOSCAR"):
-        return vio.GetPOSCAR(str(PoscarPath))
-    raise AttributeError(
-        "Could not find a POSCAR read function in VaspIO. Tried ReadPOSCAR, LoadPOSCAR, GetPOSCAR."
-    )
+def EnsureFilesExist(workdir: Path, filenames: list):
+    missing = [f for f in filenames if not (workdir / f).exists()]
+    if missing:
+        raise FileNotFoundError(f"Missing required files: {', '.join(missing)}")
 
 
-def EnsureFilesExist(WorkDir: Path, RequiredFiles: list):
-    Missing = [f for f in RequiredFiles if not (WorkDir / f).exists()]
-    if Missing:
-        raise FileNotFoundError(f"Missing required file(s): {', '.join(Missing)}")
-
-
-def WriteTextFile(FilePath: Path, Text: str):
-    FilePath.parent.mkdir(parents=True, exist_ok=True)
-    with FilePath.open("w", encoding="utf-8") as F:
-        F.write(Text)
-
-
-def CopyFile(Src: Path, Dst: Path):
-    Dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(str(Src), str(Dst))
+def CopyFile(src: Path, dst: Path):
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
 
 
 def PrepareWorkingDirectory():
-    WorkDir = Path.cwd()
+    workdir = Path.cwd()
+    oxparams = ReadOxParams(workdir / "OxParams")
 
-    # 1) Read and validate OxParams and input files
-    OxParamsPath = WorkDir / "OxParams"
-    Params = ReadOxParams(OxParamsPath)
+    # Verify input files
+    required_files = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
+    EnsureFilesExist(workdir, required_files)
 
-    RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
-    EnsureFilesExist(WorkDir, RequiredFiles)
+    # Load base POSCAR via the provided function
+    position, celldim = vio.ReadPOSCAR(workdir=str(workdir), filename="POSCAR")
 
-    # Load the baseline POSCAR once (Position, CellDim will be mutated per sim)
-    BasePoscarPath = WorkDir / "POSCAR"
-    Position, CellDim = ReadPOSCARWithVaspIO(BasePoscarPath)
+    # Load base jobsub content
+    jobsub_base = (workdir / "jobsub").read_text(encoding="utf-8")
 
-    # Read the base jobsub content once
-    JobsubBasePath = WorkDir / "jobsub"
-    with JobsubBasePath.open("r", encoding="utf-8") as F:
-        JobsubBaseContent = F.read()
+    log_lines = ["Working Directory Prepared Sucessfully"]  # exact spelling
 
-    LogLines = []
-    LogLines.append("Working Directory Prepared Sucessfully")  # exact spelling as requested
+    for temp in oxparams["Temperatures"]:
+        for sim_idx in range(1, oxparams["NSims"] + 1):
+            folder_name = f"{temp}_{sim_idx}"
+            sim_dir = workdir / folder_name
+            sim_dir.mkdir(exist_ok=True)
 
-    Temperatures = Params["Temperatures"]
-    NSims = Params["NSims"]
-    GasRatio = Params["GasRatio"]
-    InitO2 = Params["InitO2"]
+            # Copy common files
+            for fn in ["POTCAR", "job.in", "KPOINTS", "INCAR"]:
+                CopyFile(workdir / fn, sim_dir / fn)
 
-    ForCopy = ["POTCAR", "job.in", "KPOINTS", "INCAR"]  # POSCAR handled separately after opp.PreparePOSCAR
+            # Modify jobsub job name
+            tag = MakeFolderTag(folder_name)
+            jobsub_text = UpdateJobName(jobsub_base, tag)
+            (sim_dir / "jobsub").write_text(jobsub_text, encoding="utf-8")
 
-    for Temp in Temperatures:
-        for SimIdx in range(1, NSims + 1):
-            FolderName = f"{Temp}_{SimIdx}"
-            SimDir = WorkDir / FolderName
-            SimDir.mkdir(parents=True, exist_ok=True)
+            # Create Dir_VolSearch and Dir_OptUnitCell
+            vol_dir = sim_dir / "Dir_VolSearch"
+            opt_dir = sim_dir / "Dir_OptUnitCell"
+            vol_dir.mkdir(exist_ok=True)
+            opt_dir.mkdir(exist_ok=True)
 
-            # 2) Copy POTCAR, jobsub, job.in, KPOINTS, INCAR into the sim folder
-            for FN in ForCopy:
-                CopyFile(WorkDir / FN, SimDir / FN)
+            # optunitcell_is_done marker
+            (opt_dir / "optunitcell_is_done").touch()
 
-            # Prepare and write jobsub with updated job name for this folder
-            FolderTag = MakeFolderTag(FolderName)  # '{Temp}_s_{Sim}'
-            JobsubContent = UpdateJobNameInContent(JobsubBaseContent, FolderTag)
-            WriteTextFile(SimDir / "jobsub", JobsubContent)
-
-            # 3) Create subfolders
-            VolSearchDir = SimDir / "Dir_VolSearch"
-            OptUnitDir = SimDir / "Dir_OptUnitCell"
-            VolSearchDir.mkdir(parents=True, exist_ok=True)
-            OptUnitDir.mkdir(parents=True, exist_ok=True)
-
-            # 4) Create file optunitcell_is_done in Dir_OptUnitCell
-            (OptUnitDir / "optunitcell_is_done").touch()
-
-            # 5–7) Prepare new POSCAR (unique per folder) and save into the sim folder
-            # Each call should (quasi)randomize O2 placement per your module's behavior.
-            NewPosition, NewCellDim = opp.PreparePOSCAR(
-                Position, CellDim, GasRatio=GasRatio, InitO2=InitO2
+            # Prepare unique POSCAR
+            new_pos, new_cell = opp.PreparePOSCAR(
+                position, celldim,
+                GasRatio=oxparams["GasRatio"],
+                InitO2=oxparams["InitO2"]
             )
-            # Save new POSCAR into the sim folder
-            vio.WritePOSCAR(str(SimDir), NewPosition, NewCellDim)
 
-            # 8) Copy POSCAR, jobsub, KPOINTS, POTCAR, job.in into Dir_VolSearch
-            # Use the freshly written POSCAR from the sim folder.
-            CopyFile(SimDir / "POSCAR", VolSearchDir / "POSCAR")
-            CopyFile(SimDir / "jobsub", VolSearchDir / "jobsub")
-            for FN in ["KPOINTS", "POTCAR", "job.in", "INCAR"]:
-                CopyFile(SimDir / FN, VolSearchDir / FN)
+            # Save it
+            vio.WritePOSCAR(str(sim_dir), new_pos, new_cell)
 
-            # 9) Run 'sbatch jobsub' inside Dir_VolSearch
+            # Copy into Dir_VolSearch
+            for fn in ["POSCAR", "jobsub", "KPOINTS", "POTCAR", "job.in", "INCAR"]:
+                CopyFile(sim_dir / fn, vol_dir / fn)
+
+            # Submit job
+            '''
             try:
-                Proc = subprocess.run(
+                proc = subprocess.run(
                     ["sbatch", "jobsub"],
-                    cwd=str(VolSearchDir),
+                    cwd=str(vol_dir),
                     capture_output=True,
-                    text=True,
-                    check=False,
+                    text=True
                 )
-                Status = f"OK (exit {Proc.returncode})"
-                if Proc.returncode != 0:
-                    Status = f"ERROR (exit {Proc.returncode})"
-                LogLines.append(f"[{FolderName}] sbatch jobsub -> {Status}")
-                if Proc.stdout:
-                    LogLines.append(f"[{FolderName}] stdout: {Proc.stdout.strip()}")
-                if Proc.stderr:
-                    LogLines.append(f"[{FolderName}] stderr: {Proc.stderr.strip()}")
+                log_lines.append(f"[{folder_name}] sbatch exit {proc.returncode}")
+                if proc.stdout:
+                    log_lines.append(f"stdout: {proc.stdout.strip()}")
+                if proc.stderr:
+                    log_lines.append(f"stderr: {proc.stderr.strip()}")
             except FileNotFoundError:
-                LogLines.append(f"[{FolderName}] sbatch not found on PATH; skipped submission.")
-            except Exception as E:
-                LogLines.append(f"[{FolderName}] sbatch execution failed: {E!r}")
+                log_lines.append(f"[{folder_name}] sbatch not found; skipped.")
+            '''
+            
+    # xyz_files folder
+    (workdir / "xyz_files").mkdir(exist_ok=True)
 
-    # 10) Create xyz_files folder in the starting directory
-    (WorkDir / "xyz_files").mkdir(parents=True, exist_ok=True)
-
-    # 11) Create log file 'log.out' (top line already added)
-    WriteTextFile(WorkDir / "log.out", "\n".join(LogLines) + "\n")
-
-
-def Main():
-    PrepareWorkingDirectory()
+    # log.out
+    (workdir / "log.out").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
-    Main()
+    PrepareWorkingDirectory()

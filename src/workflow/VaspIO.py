@@ -220,155 +220,6 @@ def XYZTrajectoryParser(FilePath=None,
 
 
 
-def ReadPOSCAR(
-    workdir: Optional[str] = None,
-    filename: Optional[str] = None,
-    give_velocities: bool = False,
-) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """
-    Read a VASP POSCAR/CONTCAR-like file and return:
-      - Position: DataFrame with columns ['Element', 'x', 'y', 'z'] (fractional)
-      - CellDim:  DataFrame with columns ['x', 'y', 'z'] (cartesian lattice vectors)
-    If give_velocities=True, also returns Velocities: DataFrame with ['Element','vx','vy','vz'].
-
-    Args:
-        workdir: Directory to search in (defaults to current working directory).
-        filename: Explicit filename to read. If None, uses 'POSCAR' in workdir,
-                  and if that does not exist, falls back to 'CONTCAR'.
-        give_velocities: Try to parse N velocity lines (after positions). Default False.
-
-    Returns:
-        (Position, CellDim) or (Position, CellDim, Velocities)
-    """
-    # -------- helpers --------
-    def next_nonempty(idx: int, lines: list[str]) -> int:
-        while idx < len(lines) and not lines[idx].strip():
-            idx += 1
-        return idx
-
-    def parse_three_floats(line: str) -> list[float]:
-        vals = []
-        for tok in line.split():
-            try:
-                vals.append(float(tok))
-                if len(vals) == 3:
-                    break
-            except ValueError:
-                # ignore flags like T/F or comments
-                continue
-        if len(vals) != 3:
-            raise ValueError(f"Could not parse 3 numeric coords from line: {line!r}")
-        return vals
-
-    def expand_elements(elem_line: list[str], num_line: list[str]) -> list[str]:
-        out = []
-        for el, n in zip(elem_line, num_line):
-            out.extend([el] * int(n))
-        return out
-
-    def cart_to_frac(cart: np.ndarray, cell: np.ndarray) -> np.ndarray:
-        # cell is 3x3 with rows = lattice vectors as given in POSCAR
-        # r_frac satisfies r_cart = r_frac @ cell  =>  r_frac = r_cart @ inv(cell)
-        inv_cell = np.linalg.inv(cell)
-        return cart @ inv_cell
-
-    # -------- locate file --------
-    base = Path(workdir) if workdir is not None else Path.cwd()
-    if filename is None:
-        path = base / "POSCAR"
-        if not path.exists():
-            # gentle fallback for convenience
-            alt = base / "CONTCAR"
-            if alt.exists():
-                path = alt
-            else:
-                raise FileNotFoundError(f"No POSCAR or CONTCAR found in {base}")
-    else:
-        p = Path(filename)
-        path = p if p.is_absolute() else (base / p)
-    if not path.exists():
-        raise FileNotFoundError(f"File not found: {path}")
-
-    # -------- read & trim --------
-    with path.open("r", encoding="utf-8") as f:
-        lines = [ln.rstrip() for ln in f]
-    start = next_nonempty(0, lines)
-    lines = lines[start:]
-
-    # Title (ignore), scale, cell
-    # title:
-    idx = next_nonempty(1, lines)  # scale is usually line 1
-    scale = float(lines[idx].split()[0])
-    idx = next_nonempty(idx + 1, lines)
-
-    cell_rows = []
-    for _ in range(3):
-        cell_rows.append([float(x) * scale for x in lines[idx].split()[:3]])
-        idx += 1
-    cell = np.array(cell_rows, dtype=float)  # 3x3
-    CellDim = pd.DataFrame(cell_rows, columns=["x", "y", "z"])
-
-    # Element symbols + counts
-    idx = next_nonempty(idx, lines)
-    elem_line = lines[idx].split()
-    idx = next_nonempty(idx + 1, lines)
-    num_line = lines[idx].split()
-    counts = [int(x) for x in num_line]
-    n_atoms = sum(counts)
-    elements_expanded = expand_elements(elem_line, num_line)
-
-    # Coordinate header (Selective Dynamics optional)
-    idx = next_nonempty(idx + 1, lines)
-    header = lines[idx].strip().lower()
-    if header.startswith("s"):  # "Selective dynamics"
-        idx = next_nonempty(idx + 1, lines)
-        header = lines[idx].strip().lower()
-
-    if header.startswith("c"):  # Cartesian
-        is_cart = True
-    else:                        # "Direct" assumed if not Cartesian
-        is_cart = False
-
-    # Positions: read exactly n_atoms lines (more robust than 'until blank')
-    idx = next_nonempty(idx + 1, lines)
-    coords = []
-    for _ in range(n_atoms):
-        if idx >= len(lines):
-            raise ValueError("Unexpected end of file while reading positions.")
-        coords.append(parse_three_floats(lines[idx]))
-        idx += 1
-    coords = np.array(coords, dtype=float)
-
-    # Convert to fractional if needed
-    if is_cart:
-        frac = cart_to_frac(coords, cell)
-    else:
-        frac = coords
-
-    Position = pd.DataFrame(frac, columns=["x", "y", "z"])
-    Position.insert(0, "Element", elements_expanded)
-
-    if not give_velocities:
-        return Position, CellDim
-
-    # ---- optional velocities (try to parse next n_atoms lines of 3 floats) ----
-    idx = next_nonempty(idx, lines)
-    vels = []
-    for _ in range(n_atoms):
-        if idx >= len(lines) or not lines[idx].strip():
-            break
-        try:
-            vels.append(parse_three_floats(lines[idx]))
-        except ValueError:
-            break
-        idx += 1
-
-    Velocities = None
-    if len(vels) == n_atoms:
-        Velocities = pd.DataFrame(vels, columns=["vx", "vy", "vz"])
-        Velocities.insert(0, "Element", elements_expanded)
-
-    return (Position, CellDim, Velocities) if Velocities is not None else (Position, CellDim)
 
 
 def INCARParser(WorkDir = None, Parameters = ['TEBEG', 'POTIM', 'NSW'], FilePath = None):
@@ -574,7 +425,160 @@ def VolSearchParser(WorkDir = None):
     AllEnergies = pd.concat(FlattenedEnergies, ignore_index=True)
     
     return AllPositions, AllEnergies
-    
+   
+   
+   
+#%% New Gen functions here
+ 
+def ReadPOSCAR(
+    workdir: Optional[str] = None,
+    filename: Optional[str] = None,
+    give_velocities: bool = False,
+) -> Tuple[pd.DataFrame, pd.DataFrame] | Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Read a VASP POSCAR/CONTCAR-like file and return:
+      - Position: DataFrame with columns ['Element', 'x', 'y', 'z'] (fractional)
+      - CellDim:  DataFrame with columns ['x', 'y', 'z'] (cartesian lattice vectors)
+    If give_velocities=True, also returns Velocities: DataFrame with ['Element','vx','vy','vz'].
+
+    Args:
+        workdir: Directory to search in (defaults to current working directory).
+        filename: Explicit filename to read. If None, uses 'POSCAR' in workdir,
+                  and if that does not exist, falls back to 'CONTCAR'.
+        give_velocities: Try to parse N velocity lines (after positions). Default False.
+
+    Returns:
+        (Position, CellDim) or (Position, CellDim, Velocities)
+    """
+    # -------- helpers --------
+    def next_nonempty(idx: int, lines: list[str]) -> int:
+        while idx < len(lines) and not lines[idx].strip():
+            idx += 1
+        return idx
+
+    def parse_three_floats(line: str) -> list[float]:
+        vals = []
+        for tok in line.split():
+            try:
+                vals.append(float(tok))
+                if len(vals) == 3:
+                    break
+            except ValueError:
+                # ignore flags like T/F or comments
+                continue
+        if len(vals) != 3:
+            raise ValueError(f"Could not parse 3 numeric coords from line: {line!r}")
+        return vals
+
+    def expand_elements(elem_line: list[str], num_line: list[str]) -> list[str]:
+        out = []
+        for el, n in zip(elem_line, num_line):
+            out.extend([el] * int(n))
+        return out
+
+    def cart_to_frac(cart: np.ndarray, cell: np.ndarray) -> np.ndarray:
+        # cell is 3x3 with rows = lattice vectors as given in POSCAR
+        # r_frac satisfies r_cart = r_frac @ cell  =>  r_frac = r_cart @ inv(cell)
+        inv_cell = np.linalg.inv(cell)
+        return cart @ inv_cell
+
+    # -------- locate file --------
+    base = Path(workdir) if workdir is not None else Path.cwd()
+    if filename is None:
+        path = base / "POSCAR"
+        if not path.exists():
+            # gentle fallback for convenience
+            alt = base / "CONTCAR"
+            if alt.exists():
+                path = alt
+            else:
+                raise FileNotFoundError(f"No POSCAR or CONTCAR found in {base}")
+    else:
+        p = Path(filename)
+        path = p if p.is_absolute() else (base / p)
+    if not path.exists():
+        raise FileNotFoundError(f"File not found: {path}")
+
+    # -------- read & trim --------
+    with path.open("r", encoding="utf-8") as f:
+        lines = [ln.rstrip() for ln in f]
+    start = next_nonempty(0, lines)
+    lines = lines[start:]
+
+    # Title (ignore), scale, cell
+    # title:
+    idx = next_nonempty(1, lines)  # scale is usually line 1
+    scale = float(lines[idx].split()[0])
+    idx = next_nonempty(idx + 1, lines)
+
+    cell_rows = []
+    for _ in range(3):
+        cell_rows.append([float(x) * scale for x in lines[idx].split()[:3]])
+        idx += 1
+    cell = np.array(cell_rows, dtype=float)  # 3x3
+    CellDim = pd.DataFrame(cell_rows, columns=["x", "y", "z"])
+
+    # Element symbols + counts
+    idx = next_nonempty(idx, lines)
+    elem_line = lines[idx].split()
+    idx = next_nonempty(idx + 1, lines)
+    num_line = lines[idx].split()
+    counts = [int(x) for x in num_line]
+    n_atoms = sum(counts)
+    elements_expanded = expand_elements(elem_line, num_line)
+
+    # Coordinate header (Selective Dynamics optional)
+    idx = next_nonempty(idx + 1, lines)
+    header = lines[idx].strip().lower()
+    if header.startswith("s"):  # "Selective dynamics"
+        idx = next_nonempty(idx + 1, lines)
+        header = lines[idx].strip().lower()
+
+    if header.startswith("c"):  # Cartesian
+        is_cart = True
+    else:                        # "Direct" assumed if not Cartesian
+        is_cart = False
+
+    # Positions: read exactly n_atoms lines (more robust than 'until blank')
+    idx = next_nonempty(idx + 1, lines)
+    coords = []
+    for _ in range(n_atoms):
+        if idx >= len(lines):
+            raise ValueError("Unexpected end of file while reading positions.")
+        coords.append(parse_three_floats(lines[idx]))
+        idx += 1
+    coords = np.array(coords, dtype=float)
+
+    # Convert to fractional if needed
+    if is_cart:
+        frac = cart_to_frac(coords, cell)
+    else:
+        frac = coords
+
+    Position = pd.DataFrame(frac, columns=["x", "y", "z"])
+    Position.insert(0, "Element", elements_expanded)
+
+    if not give_velocities:
+        return Position, CellDim
+
+    # ---- optional velocities (try to parse next n_atoms lines of 3 floats) ----
+    idx = next_nonempty(idx, lines)
+    vels = []
+    for _ in range(n_atoms):
+        if idx >= len(lines) or not lines[idx].strip():
+            break
+        try:
+            vels.append(parse_three_floats(lines[idx]))
+        except ValueError:
+            break
+        idx += 1
+
+    Velocities = None
+    if len(vels) == n_atoms:
+        Velocities = pd.DataFrame(vels, columns=["vx", "vy", "vz"])
+        Velocities.insert(0, "Element", elements_expanded)
+
+    return (Position, CellDim, Velocities) if Velocities is not None else (Position, CellDim)
 
 
 def WritePOSCAR(
