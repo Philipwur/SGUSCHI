@@ -36,7 +36,10 @@ import shutil
 import subprocess
 import sys
 
-sys.path.append('..')
+from pathlib import Path
+
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
 import OxidationPreprocessing as opp

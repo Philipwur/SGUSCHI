@@ -6,12 +6,14 @@ import numpy as np
 import os
 from tqdm import tqdm
 import re
-
+import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
 from workflow import OxidationAnalysis as an
 
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 
 def FixElementFormatting(Position, ReturnPrevNames = False):
