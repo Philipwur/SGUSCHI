@@ -144,6 +144,14 @@ def ReadOxParams(FilePath: Path) -> Dict[str, object]:
     return ParamsOut
 
 
+def MakeFolderTag(folder_name: str) -> str:
+    """Convert '873_2' → '873_s_2' for job name."""
+    parts = folder_name.split("_", 1)
+    if len(parts) == 2:
+        return f"{parts[0]}_s_{parts[1]}"
+    return f"{folder_name}_s"
+
+
 def UpdateJobName(job_content: str, folder_tag: str) -> str:
     """Replace the #SBATCH job name line with the folder tag."""
     pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", re.MULTILINE)
