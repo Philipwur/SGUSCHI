@@ -89,8 +89,8 @@ def PrepareWorkingDirectory():
     EnsureFilesExist(WorkDir, RequiredFiles)
 
     # Load the baseline POSCAR once (Position, CellDim will be mutated per sim)
-    BasePoscarPath = WorkDir / "POSCAR"
-    Position, CellDim = vio.ReadPOSCAR(BasePoscarPath)
+    #BasePoscarPath = WorkDir / "POSCAR"
+    Position, CellDim = vio.ReadPOSCAR(WorkDir)
 
     # Read the base jobsub content once
     JobsubBasePath = WorkDir / "jobsub"

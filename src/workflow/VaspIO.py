@@ -197,7 +197,7 @@ def CheckForMLFF(WorkDir):
         MLFF = False
     return MLFF
 
-
+#NOT WORKING
 def OUTCARParser(WorkDir=None, MLFF=False):
     if WorkDir is None:
         WorkDir = os.getcwd()
@@ -233,7 +233,7 @@ def OUTCARParser(WorkDir=None, MLFF=False):
     AllEnergies = pd.DataFrame({'Time (fs)': Times, 'Energy (eV)': AllEnergies})
     return AllPositions, AllEnergies
 
-
+#NOT WORKIGN BUT MAYBE DEFUNCT
 def VolSearchParser(WorkDir=None):
     if WorkDir is None:
         WorkDir = os.getcwd()
