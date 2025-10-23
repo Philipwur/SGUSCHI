@@ -1,6 +1,7 @@
 # %%
 """
 This Code Will Set Up the Work Space according to the OxParams file.
+Note, if oxygens are in base structure, code might break. (have not tested)
 
 ====================================================
 Workplace Requirements for Working Directory Script
