@@ -12,7 +12,7 @@ from typing import Optional, Tuple, Union, List
 from typing import Dict
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
-from workflow import OxidationAnalysis as an
+#from workflow import OxidationAnalysis as an
 
 
 def FixElementFormatting(Position, ReturnPrevNames = False):
@@ -37,13 +37,6 @@ def FixElementFormatting(Position, ReturnPrevNames = False):
         return Position
 
 
-def AddElementsToPos(Position, AtomInfo):
-    """
-    Adds an 'Element' column to an atomic position or velocity DataFrame.
-    """
-    Elements = np.repeat(AtomInfo['Element'].values, AtomInfo['Number'].values)
-    Position.insert(0, 'Element', Elements)
-    return Position
 
 
 def XYZTrajectoryParser(FilePath=None,
@@ -186,17 +179,8 @@ def INCARParser(WorkDir=None, Parameters=None, FilePath=None):
     return [INCARValues[param] for param in Parameters]
 
 
-def CheckForMLFF(WorkDir):
-    try:
-        MLFF = INCARParser(WorkDir, ['ML_LMLFF'])
-        if MLFF[0] == '.TRUE.':
-            MLFF = True
-        else:
-            MLFF = False
-    except Exception:
-        MLFF = False
-    return MLFF
 
+'''
 #NOT WORKING
 def OUTCARParser(WorkDir=None, MLFF=False):
     if WorkDir is None:
@@ -259,8 +243,28 @@ def VolSearchParser(WorkDir=None):
     AllEnergies = pd.concat(FlattenedEnergies, ignore_index=True)
     return AllPositions, AllEnergies
 
+# In theory we dont need this anymore
+def AddElementsToPos(Position, AtomInfo):
+    """
+    Adds an 'Element' column to an atomic position or velocity DataFrame.
+    """
+    Elements = np.repeat(AtomInfo['Element'].values, AtomInfo['Number'].values)
+    Position.insert(0, 'Element', Elements)
+    return Position
+'''
 
 #%% New Gen functions here
+
+def CheckForMLFF(WorkDir):
+    try:
+        MLFF = INCARParser(WorkDir, ['ML_LMLFF'])
+        if MLFF[0] == '.TRUE.':
+            MLFF = True
+        else:
+            MLFF = False
+    except Exception:
+        MLFF = False
+    return MLFF
 
 def ReadOxParams(FilePath: Path) -> Dict[str, object]:
     """

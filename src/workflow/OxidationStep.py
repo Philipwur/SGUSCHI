@@ -14,35 +14,6 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from workflow import VaspIO as vio
 from workflow import OxidationAnalysis as an
 
-    
-def FixElementFormatting(Position, ReturnPrevNames = False):
-    
-    '''
-    A function which fixes the element names in a position/velocity DataFrame so
-    elements can be comprehended by bond finding algorithms later. 
-    
-    Parameters:
-        Position (DataFrame): Atom positions with 'Element' and fractional 
-                              coordinates 'x', 'y', 'z'. Can also be Velocity.
-        ReturnPrevNames (boolean): Condition on whether to output old names, 
-                                   should be set to T if renaming back is needed.
-    '''
-    
-    if ReturnPrevNames == True:
-        PrevNames = Position['Element'].unique()
-            
-    for i in Position['Element'].unique():
-        if '_' in i:
-            FixedName = i.split('_')[0]
-            Position.loc[Position['Element'] == i, 'Element'] = FixedName
-        elif '/' in i:
-            FixedName = i.split('/')[0]
-            Position.loc[Position['Element'] == i, 'Element'] = FixedName
-
-    if ReturnPrevNames == True:
-        return Position, PrevNames
-    else:
-        return Position
 
 
 def RemoveCO(Position, CCoords):
@@ -287,16 +258,24 @@ def main(WorkDir = None, FreezePOSCAR = False):
     #Hyperparameters
     if os.path.exists(os.path.join(WorkDir, '..', 'OxParams')):
         
-        #needs rewrite to use new OxParams
-        AtomicRadiusTol, O2Tol, OxygenSmoothing = vio.ReadOxParams(WorkDir)
-    
+        OxParams = vio.ReadOxParams(f'{WorkDir}/..')
+        
+        AtomicRadiusTol = OxParams['AtomicRadiusTol']
+        O2Tol = OxParams['O2Tol']
+        OxygenSmoothing = OxParams['OxygenSmoothing']
+        
     else:
+        
+        #Need to come up with better logic here
+        
         #Presets if no Oxdiation Parameters file exists in one folder above workdir
         AtomicRadiusTol = 1.75 #Factor for bond finding (1.75 means 75% of bond length extra tolerance)
         O2Tol = 0.9 #Number of O2 atoms present before another gets added. Exponential smoothing factor of 0.001 steps so always set this below the actual target O2 -> think of it as a "lower bound" for the system. Gets adjusted downwards as available volume decreases (to maintain constant partial pressure).
         OxygenSmoothing = 0.001 #Oxygen Expoenential smoothign parameter. Lower = More smoothing, less responsive.
-        
         System = ['Zr', 'C', 'O'] #System elements, used for bond finding and gas finding.
+        
+    if os.path.exists(os.path.join(WorkDir, 'CovalentRadii')):
+        CovalentRadii = vio.ReadCovalentRadii(os.path.join(WorkDir, 'CovalentRadii'))
         
     #--------------------------- Gather Information ---------------------------
 
@@ -307,13 +286,12 @@ def main(WorkDir = None, FreezePOSCAR = False):
     MLFF = vio.CheckForMLFF(WorkDir)
 
     #Read POSCAR of last jobs (in working directory)
-    Positions, AtomInfo, CellDim, Velocities = vio.ContcarParser(WorkDir, 
-                                                                 GiveVelocities = True,
-                                                                 ReadPOSCAR = True)
+    Positions, CellDim, Velocities = vio.ReadPOSCAR(WorkDir, 
+                                                    give_velocities = True
+                                                    )
         
     #Rename Elements such that algos can work with them
-    Positions, PrevNames = FixElementFormatting(Positions, ReturnPrevNames = True)
-    AtomInfo = FixElementFormatting(AtomInfo, ReturnPrevNames = False)
+    Positions, PrevNames = vio.FixElementFormatting(Positions, ReturnPrevNames = True)
     
     #Read RateAnalysis.csv
     RateAnalysis, TotalTime, Temperature = ReadRateAnalysis(WorkDir)
@@ -331,7 +309,7 @@ def main(WorkDir = None, FreezePOSCAR = False):
         #Go over all 80 steps 
         for Position in AllPositions:
             
-            Position = FixElementFormatting(Position)
+            Position = vio.FixElementFormatting(Position)
             Count, GasIndices, _ = an.FindGases(Position, 
                                                 CellDim, 
                                                 AtomicRadiusTol = AtomicRadiusTol)
