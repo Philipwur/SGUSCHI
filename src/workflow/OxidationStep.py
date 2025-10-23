@@ -9,34 +9,11 @@ import shutil
 import sys
 from pathlib import Path
 
-
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
 from workflow import OxidationAnalysis as an
 
-def ReadOxParams(WorkDir = None, Paramereters = None):
-    
-    '''
-    Function which allows for the setting of different oxidation hyperparamers
-    across different oxidation simulations. 
-    Currently only AtomicRadiusTolerance, O2tolerance and O2 Smoothing factor 
-    can be set. Uses same format as INCAR. 
-    '''
-    
-    if WorkDir == None:
-        WorkDir = os.getcwd()
-    
-    OxParamsPath = os.path.join(WorkDir, '..', 'OxParams')
-    
-    if Paramereters is None:
-        Paramereters = ['AtomicRadiusTol', 'O2Tol', 'O2Smoothing']
-    
-    AtomicRadiusTol, O2Tol, O2Smoothing = vio.INCARParser(Parameters = Paramereters,
-                                                          FilePath = OxParamsPath)
-
-    return AtomicRadiusTol, O2Tol, O2Smoothing
-    
     
 def FixElementFormatting(Position, ReturnPrevNames = False):
     
@@ -276,6 +253,7 @@ def PlaceO2Molecules(Positions: pd.DataFrame,
 
     return UpdatedPositions
 
+
 def CalculateVolumeRatio(WorkDir, CurrentGasVolume):
     #Calculate the ratio of starting volume (For which OTol was set) to current 
     #gas volume, to keep partialpressure constant.
@@ -308,13 +286,16 @@ def main(WorkDir = None, FreezePOSCAR = False):
     
     #Hyperparameters
     if os.path.exists(os.path.join(WorkDir, '..', 'OxParams')):
-        AtomicRadiusTol, O2Tol, OxygenSmoothing = ReadOxParams(WorkDir)
+        
+        #needs rewrite to use new OxParams
+        AtomicRadiusTol, O2Tol, OxygenSmoothing = vio.ReadOxParams(WorkDir)
     
     else:
         #Presets if no Oxdiation Parameters file exists in one folder above workdir
         AtomicRadiusTol = 1.75 #Factor for bond finding (1.75 means 75% of bond length extra tolerance)
         O2Tol = 0.9 #Number of O2 atoms present before another gets added. Exponential smoothing factor of 0.001 steps so always set this below the actual target O2 -> think of it as a "lower bound" for the system. Gets adjusted downwards as available volume decreases (to maintain constant partial pressure).
         OxygenSmoothing = 0.001 #Oxygen Expoenential smoothign parameter. Lower = More smoothing, less responsive.
+        
         System = ['Zr', 'C', 'O'] #System elements, used for bond finding and gas finding.
         
     #--------------------------- Gather Information ---------------------------
@@ -488,6 +469,7 @@ def main(WorkDir = None, FreezePOSCAR = False):
     'Lower 95% CI',
     'Upper 95% CI'
     '''
+
 
 def FixRateAnalysis(WorkDir):
     #Function that rewrites RateAnalysis if there have been issues in run

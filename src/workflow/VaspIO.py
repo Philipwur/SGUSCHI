@@ -9,6 +9,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Optional, Tuple, Union, List
+from typing import Dict
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 from workflow import OxidationAnalysis as an
@@ -260,6 +261,106 @@ def VolSearchParser(WorkDir=None):
 
 
 #%% New Gen functions here
+
+def ReadOxParams(FilePath: Path) -> Dict[str, object]:
+    """
+    Parse OxParams key=value lines.
+
+    Supports Temperatures specified either with or without brackets, e.g.:
+      Temperatures = [873, 973, 1073, 1273]
+      Temperatures = 873, 973, 1073, 1273
+
+    Returns:
+      {
+        "Temperatures": ["873", "973", ...],  # strings (safe for folder names)
+        "NSims": int,
+        "GasRatio": float,
+        "InitO2": int,
+        # Optional passthroughs if present:
+        "AtomicRadiusTol": float,
+        "TargetPP": int,
+        "PPSmoothing": float,
+      }
+    """
+    if not FilePath.exists():
+        raise FileNotFoundError("OxParams not found at: {}".format(FilePath))
+
+    # --- Read raw key/value pairs ---
+    RawParams: Dict[str, str] = {}
+    with FilePath.open("r", encoding="utf-8") as File:
+        for Line in File:
+            Line = Line.strip()
+            if not Line or Line.startswith("#") or "=" not in Line:
+                continue
+            Key, Value = [x.strip() for x in Line.split("=", 1)]
+            RawParams[Key] = Value
+
+    # --- Helper functions ---
+    def ParseTemperatures(Value: str) -> List[str]:
+        """Extract numeric temperature tokens from comma/space-separated lists with or without brackets."""
+        Cleaned = Value.strip().strip("[](){}")
+        Tokens = re.split(r"[,\s]+", Cleaned)
+        Temperatures: List[str] = []
+        for Token in Tokens:
+            if not Token:
+                continue
+            Match = re.search(r"-?\d+(?:\.\d+)?", Token)
+            if Match:
+                Temperatures.append(Match.group(0))
+        if not Temperatures:
+            raise ValueError("Could not parse Temperatures from: {!r}".format(Value))
+        return Temperatures
+
+    def Require(Key: str) -> str:
+        if Key not in RawParams or RawParams[Key] == "":
+            raise ValueError("{} must be provided in OxParams.".format(Key))
+        return RawParams[Key]
+
+    # --- Parse required fields ---
+    Temperatures = ParseTemperatures(Require("Temperatures"))
+
+    try:
+        NSims = int(Require("NSims"))
+    except ValueError as Err:
+        raise ValueError("NSims must be an integer.") from Err
+
+    try:
+        GasRatio = float(Require("GasRatio"))
+    except ValueError as Err:
+        raise ValueError("GasRatio must be a float.") from Err
+
+    try:
+        InitO2 = int(Require("InitO2"))
+    except ValueError as Err:
+        raise ValueError("InitO2 must be an integer.") from Err
+
+    # --- Optional passthroughs ---
+    ParamsOut: Dict[str, object] = {
+        "Temperatures": Temperatures,
+        "NSims": NSims,
+        "GasRatio": GasRatio,
+        "InitO2": InitO2,
+    }
+
+    if "AtomicRadiusTol" in RawParams and RawParams["AtomicRadiusTol"]:
+        try:
+            ParamsOut["AtomicRadiusTol"] = float(RawParams["AtomicRadiusTol"])
+        except ValueError:
+            pass  # ignore if not numeric
+
+    if "TargetPP" in RawParams and RawParams["TargetPP"]:
+        try:
+            ParamsOut["TargetPP"] = int(float(RawParams["TargetPP"]))
+        except ValueError:
+            pass
+
+    if "PPSmoothing" in RawParams and RawParams["PPSmoothing"]:
+        try:
+            ParamsOut["PPSmoothing"] = float(RawParams["PPSmoothing"])
+        except ValueError:
+            pass
+
+    return ParamsOut
 
 def ReadPOSCAR(
     workdir=None,

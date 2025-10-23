@@ -24,7 +24,7 @@ The following files must exist before running this script:
 5. INCAR           → VASP INCAR input
 6. job.in          → SLUSCHI job file
 7. jobsub          → SLURM job submission script
-8. IonicRadii      → File containing ionic radii for elements
+8. CovalentRadii   → File containing Covalent radii for elements for bonding algorithm
 9. jobsub_master   → Master process slurm job submission script
 """
 
@@ -33,7 +33,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Dict, List  # ✅ for 3.9-safe typing
+from typing import List  
 
 # --- Make imports location-independent ---
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -41,107 +41,6 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 from workflow import VaspIO as vio
 import OxidationPreprocessing as opp
 # from workflow import OxidationAnalysis as an
-
-
-def ReadOxParams(FilePath: Path) -> Dict[str, object]:
-    """
-    Parse OxParams key=value lines.
-
-    Supports Temperatures specified either with or without brackets, e.g.:
-      Temperatures = [873, 973, 1073, 1273]
-      Temperatures = 873, 973, 1073, 1273
-
-    Returns:
-      {
-        "Temperatures": ["873", "973", ...],  # strings (safe for folder names)
-        "NSims": int,
-        "GasRatio": float,
-        "InitO2": int,
-        # Optional passthroughs if present:
-        "AtomicRadiusTol": float,
-        "TargetPP": int,
-        "PPSmoothing": float,
-      }
-    """
-    if not FilePath.exists():
-        raise FileNotFoundError("OxParams not found at: {}".format(FilePath))
-
-    # --- Read raw key/value pairs ---
-    RawParams: Dict[str, str] = {}
-    with FilePath.open("r", encoding="utf-8") as File:
-        for Line in File:
-            Line = Line.strip()
-            if not Line or Line.startswith("#") or "=" not in Line:
-                continue
-            Key, Value = [x.strip() for x in Line.split("=", 1)]
-            RawParams[Key] = Value
-
-    # --- Helper functions ---
-    def ParseTemperatures(Value: str) -> List[str]:
-        """Extract numeric temperature tokens from comma/space-separated lists with or without brackets."""
-        Cleaned = Value.strip().strip("[](){}")
-        Tokens = re.split(r"[,\s]+", Cleaned)
-        Temperatures: List[str] = []
-        for Token in Tokens:
-            if not Token:
-                continue
-            Match = re.search(r"-?\d+(?:\.\d+)?", Token)
-            if Match:
-                Temperatures.append(Match.group(0))
-        if not Temperatures:
-            raise ValueError("Could not parse Temperatures from: {!r}".format(Value))
-        return Temperatures
-
-    def Require(Key: str) -> str:
-        if Key not in RawParams or RawParams[Key] == "":
-            raise ValueError("{} must be provided in OxParams.".format(Key))
-        return RawParams[Key]
-
-    # --- Parse required fields ---
-    Temperatures = ParseTemperatures(Require("Temperatures"))
-
-    try:
-        NSims = int(Require("NSims"))
-    except ValueError as Err:
-        raise ValueError("NSims must be an integer.") from Err
-
-    try:
-        GasRatio = float(Require("GasRatio"))
-    except ValueError as Err:
-        raise ValueError("GasRatio must be a float.") from Err
-
-    try:
-        InitO2 = int(Require("InitO2"))
-    except ValueError as Err:
-        raise ValueError("InitO2 must be an integer.") from Err
-
-    # --- Optional passthroughs ---
-    ParamsOut: Dict[str, object] = {
-        "Temperatures": Temperatures,
-        "NSims": NSims,
-        "GasRatio": GasRatio,
-        "InitO2": InitO2,
-    }
-
-    if "AtomicRadiusTol" in RawParams and RawParams["AtomicRadiusTol"]:
-        try:
-            ParamsOut["AtomicRadiusTol"] = float(RawParams["AtomicRadiusTol"])
-        except ValueError:
-            pass  # ignore if not numeric
-
-    if "TargetPP" in RawParams and RawParams["TargetPP"]:
-        try:
-            ParamsOut["TargetPP"] = int(float(RawParams["TargetPP"]))
-        except ValueError:
-            pass
-
-    if "PPSmoothing" in RawParams and RawParams["PPSmoothing"]:
-        try:
-            ParamsOut["PPSmoothing"] = float(RawParams["PPSmoothing"])
-        except ValueError:
-            pass
-
-    return ParamsOut
 
 
 def MakeFolderTag(folder_name: str) -> str:
@@ -173,85 +72,132 @@ def CopyFile(src: Path, dst: Path):
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 
+def WriteTextFile(FilePath: Path, Text: str):
+    FilePath.parent.mkdir(parents=True, exist_ok=True)
+    with FilePath.open("w", encoding="utf-8") as F:
+        F.write(Text)
+        
 
 def PrepareWorkingDirectory():
-    """Main setup routine to prepare simulation directories."""
-    workdir = Path.cwd()
-    oxparams = ReadOxParams(workdir / "OxParams")
+    WorkDir = Path.cwd()
 
-    # Verify input files
-    required_files = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
-    EnsureFilesExist(workdir, required_files)
+    # 1) Read and validate OxParams and input files
+    OxParamsPath = WorkDir / "OxParams"
+    Params = vio.ReadOxParams(OxParamsPath)
 
-    # Load base POSCAR via the provided function
-    position, celldim = vio.ReadPOSCAR(workdir=str(workdir), filename="POSCAR")
+    RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
+    EnsureFilesExist(WorkDir, RequiredFiles)
 
-    # Load base jobsub content
-    jobsub_base = (workdir / "jobsub").read_text(encoding="utf-8")
+    # Load the baseline POSCAR once (Position, CellDim will be mutated per sim)
+    BasePoscarPath = WorkDir / "POSCAR"
+    Position, CellDim = vio.ReadPOSCAR(BasePoscarPath)
 
-    log_lines = ["Working Directory Prepared Sucessfully"]  # exact spelling
+    # Read the base jobsub content once
+    JobsubBasePath = WorkDir / "jobsub"
+    with JobsubBasePath.open("r", encoding="utf-8") as F:
+        JobsubBaseContent = F.read()
 
-    for temp in oxparams["Temperatures"]:
-        for sim_idx in range(1, oxparams["NSims"] + 1):
-            folder_name = "{}_{}".format(temp, sim_idx)
-            sim_dir = workdir / folder_name
-            sim_dir.mkdir(exist_ok=True)
+    LogLines = []
+    LogLines.append("Working Directory Prepared Sucessfully")
 
-            # Copy common files
-            for fn in ["POTCAR", "job.in", "KPOINTS", "INCAR"]:
-                CopyFile(workdir / fn, sim_dir / fn)
+    Temperatures = Params["Temperatures"]
+    NSims = Params["NSims"]
+    GasRatio = Params["GasRatio"]
+    InitO2 = Params["InitO2"]
 
-            # Modify jobsub job name
-            tag = MakeFolderTag(folder_name)
-            jobsub_text = UpdateJobName(jobsub_base, tag)
-            (sim_dir / "jobsub").write_text(jobsub_text, encoding="utf-8")
+    ForCopy = ["POTCAR", "job.in", "KPOINTS", "INCAR"]
 
-            # Create Dir_VolSearch and Dir_OptUnitCell
-            vol_dir = sim_dir / "Dir_VolSearch"
-            opt_dir = sim_dir / "Dir_OptUnitCell"
-            vol_dir.mkdir(exist_ok=True)
-            opt_dir.mkdir(exist_ok=True)
+    for Temp in Temperatures:
+        for SimIdx in range(1, NSims + 1):
+            FolderName = f"{Temp}_{SimIdx}"
+            SimDir = WorkDir / FolderName
+            SimDir.mkdir(parents=True, exist_ok=True)
 
-            # optunitcell_is_done marker
-            (opt_dir / "optunitcell_is_done").touch()
+            # 2) Copy files into sim folder
+            for FN in ForCopy:
+                CopyFile(WorkDir / FN, SimDir / FN)
 
-            # Prepare unique POSCAR
-            new_pos, new_cell = opp.PreparePOSCAR(
-                position, celldim,
-                GasRatio=oxparams["GasRatio"],
-                InitO2=oxparams["InitO2"]
+            # --- NEW FEATURE: Update TEBEG / TEEND in INCAR to match this folder’s temperature ---
+            IncarPath = SimDir / "INCAR"
+            if IncarPath.exists():
+                with IncarPath.open("r", encoding="utf-8") as F:
+                    Lines = F.readlines()
+
+                NewLines = []
+                for Line in Lines:
+                    if re.search(r"\bTEBEG\b", Line, re.IGNORECASE):
+                        # Preserve comment if present
+                        Comment = ""
+                        if "#" in Line:
+                            Comment = "#" + Line.split("#", 1)[1].strip()
+                        NewLines.append("TEBEG = {} {}\n".format(Temp, Comment))
+                    elif re.search(r"\bTEEND\b", Line, re.IGNORECASE):
+                        Comment = ""
+                        if "#" in Line:
+                            Comment = "#" + Line.split("#", 1)[1].strip()
+                        NewLines.append("TEEND = {} {}\n".format(Temp, Comment))
+                    else:
+                        NewLines.append(Line)
+
+                with IncarPath.open("w", encoding="utf-8") as F:
+                    F.writelines(NewLines)
+
+            # Prepare and write jobsub with updated job name
+            FolderTag = MakeFolderTag(FolderName)
+            JobsubContent = UpdateJobName(JobsubBaseContent, FolderTag)
+            WriteTextFile(SimDir / "jobsub", JobsubContent)
+
+            # 3) Create subfolders
+            VolSearchDir = SimDir / "Dir_VolSearch"
+            OptUnitDir = SimDir / "Dir_OptUnitCell"
+            VolSearchDir.mkdir(parents=True, exist_ok=True)
+            OptUnitDir.mkdir(parents=True, exist_ok=True)
+
+            # 4) Create optunitcell_is_done file
+            (OptUnitDir / "optunitcell_is_done").touch()
+
+            # 5–7) Prepare new POSCAR (unique per folder)
+            NewPosition, NewCellDim = opp.PreparePOSCAR(
+                Position, CellDim, GasRatio=GasRatio, InitO2=InitO2
             )
+            vio.WritePOSCAR(str(SimDir), NewPosition, NewCellDim)
 
-            # Save it
-            vio.WritePOSCAR(str(sim_dir), new_pos, new_cell)
+            # 8) Copy files into Dir_VolSearch
+            CopyFile(SimDir / "POSCAR", VolSearchDir / "POSCAR")
+            CopyFile(SimDir / "jobsub", VolSearchDir / "jobsub")
+            for FN in ["KPOINTS", "POTCAR", "job.in", "INCAR"]:
+                CopyFile(SimDir / FN, VolSearchDir / FN)
 
-            # Copy into Dir_VolSearch
-            for fn in ["POSCAR", "jobsub", "KPOINTS", "POTCAR", "job.in", "INCAR"]:
-                CopyFile(sim_dir / fn, vol_dir / fn)
-
-            # --- Job submission (currently disabled for safety) ---
             '''
+            # 9) Run sbatch jobsub
             try:
-                proc = subprocess.run(
+                Proc = subprocess.run(
                     ["sbatch", "jobsub"],
-                    cwd=str(vol_dir),
+                    cwd=str(VolSearchDir),
                     capture_output=True,
-                    text=True
+                    text=True,
+                    check=False,
                 )
-                log_lines.append("[{}] sbatch exit {}".format(folder_name, proc.returncode))
-                if proc.stdout:
-                    log_lines.append("stdout: {}".format(proc.stdout.strip()))
-                if proc.stderr:
-                    log_lines.append("stderr: {}".format(proc.stderr.strip()))
+                Status = "OK (exit {})".format(Proc.returncode)
+                if Proc.returncode != 0:
+                    Status = "ERROR (exit {})".format(Proc.returncode)
+                LogLines.append("[{}] sbatch jobsub -> {}".format(FolderName, Status))
+                if Proc.stdout:
+                    LogLines.append("[{}] stdout: {}".format(FolderName, Proc.stdout.strip()))
+                if Proc.stderr:
+                    LogLines.append("[{}] stderr: {}".format(FolderName, Proc.stderr.strip()))
             except FileNotFoundError:
-                log_lines.append("[{}] sbatch not found; skipped.".format(folder_name))
+                LogLines.append("[{}] sbatch not found on PATH; skipped submission.".format(FolderName))
+            except Exception as E:
+                LogLines.append("[{}] sbatch execution failed: {!r}".format(FolderName, E))
             '''
 
-    # xyz_files folder
-    (workdir / "xyz_files").mkdir(exist_ok=True)
+    # 10) Create xyz_files folder
+    (WorkDir / "xyz_files").mkdir(parents=True, exist_ok=True)
 
-    # log.out
-    (workdir / "log.out").write_text("\n".join(log_lines) + "\n", encoding="utf-8")
+    # 11) Write log.out
+    WriteTextFile(WorkDir / "log.out", "\n".join(LogLines) + "\n")
+
 
 
 if __name__ == "__main__":
