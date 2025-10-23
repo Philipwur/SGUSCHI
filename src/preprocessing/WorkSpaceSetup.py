@@ -43,48 +43,105 @@ import OxidationPreprocessing as opp
 # from workflow import OxidationAnalysis as an
 
 
-def ReadOxParams(file_path: Path) -> Dict[str, object]:
-    """Parse key=value pairs from OxParams and convert to proper types."""
-    if not file_path.exists():
-        raise FileNotFoundError(f"Missing file: {file_path}")
+def ReadOxParams(FilePath: Path) -> Dict[str, object]:
+    """
+    Parse OxParams key=value lines.
 
-    params = {}
-    with file_path.open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
+    Supports Temperatures specified either with or without brackets, e.g.:
+      Temperatures = [873, 973, 1073, 1273]
+      Temperatures = 873, 973, 1073, 1273
+
+    Returns:
+      {
+        "Temperatures": ["873", "973", ...],  # strings (safe for folder names)
+        "NSims": int,
+        "GasRatio": float,
+        "InitO2": int,
+        # Optional passthroughs if present:
+        "AtomicRadiusTol": float,
+        "TargetPP": int,
+        "PPSmoothing": float,
+      }
+    """
+    if not FilePath.exists():
+        raise FileNotFoundError("OxParams not found at: {}".format(FilePath))
+
+    # --- Read raw key/value pairs ---
+    RawParams: Dict[str, str] = {}
+    with FilePath.open("r", encoding="utf-8") as File:
+        for Line in File:
+            Line = Line.strip()
+            if not Line or Line.startswith("#") or "=" not in Line:
                 continue
-            key, val = [x.strip() for x in line.split("=", 1)]
-            params[key] = val
+            Key, Value = [x.strip() for x in Line.split("=", 1)]
+            RawParams[Key] = Value
 
-    # Required fields
-    required = ["Temperatures", "NSims", "GasRatio", "InitO2"]
-    for key in required:
-        if key not in params or not params[key]:
-            raise ValueError(f"'{key}' missing in OxParams")
+    # --- Helper functions ---
+    def ParseTemperatures(Value: str) -> List[str]:
+        """Extract numeric temperature tokens from comma/space-separated lists with or without brackets."""
+        Cleaned = Value.strip().strip("[](){}")
+        Tokens = re.split(r"[,\s]+", Cleaned)
+        Temperatures: List[str] = []
+        for Token in Tokens:
+            if not Token:
+                continue
+            Match = re.search(r"-?\d+(?:\.\d+)?", Token)
+            if Match:
+                Temperatures.append(Match.group(0))
+        if not Temperatures:
+            raise ValueError("Could not parse Temperatures from: {!r}".format(Value))
+        return Temperatures
 
-    # Type conversions
-    temps_raw = params["Temperatures"]
-    if "," in temps_raw:
-        temperatures = [t.strip() for t in temps_raw.split(",") if t.strip()]
-    else:
-        temperatures = [t for t in temps_raw.split() if t]
+    def Require(Key: str) -> str:
+        if Key not in RawParams or RawParams[Key] == "":
+            raise ValueError("{} must be provided in OxParams.".format(Key))
+        return RawParams[Key]
 
-    params_out = {
-        "Temperatures": temperatures,
-        "NSims": int(params["NSims"]),
-        "GasRatio": float(params["GasRatio"]),
-        "InitO2": int(params["InitO2"]),
+    # --- Parse required fields ---
+    Temperatures = ParseTemperatures(Require("Temperatures"))
+
+    try:
+        NSims = int(Require("NSims"))
+    except ValueError as Err:
+        raise ValueError("NSims must be an integer.") from Err
+
+    try:
+        GasRatio = float(Require("GasRatio"))
+    except ValueError as Err:
+        raise ValueError("GasRatio must be a float.") from Err
+
+    try:
+        InitO2 = int(Require("InitO2"))
+    except ValueError as Err:
+        raise ValueError("InitO2 must be an integer.") from Err
+
+    # --- Optional passthroughs ---
+    ParamsOut: Dict[str, object] = {
+        "Temperatures": Temperatures,
+        "NSims": NSims,
+        "GasRatio": GasRatio,
+        "InitO2": InitO2,
     }
-    return params_out
 
+    if "AtomicRadiusTol" in RawParams and RawParams["AtomicRadiusTol"]:
+        try:
+            ParamsOut["AtomicRadiusTol"] = float(RawParams["AtomicRadiusTol"])
+        except ValueError:
+            pass  # ignore if not numeric
 
-def MakeFolderTag(folder_name: str) -> str:
-    """Convert '873_2' → '873_s_2' for job name."""
-    parts = folder_name.split("_", 1)
-    if len(parts) == 2:
-        return f"{parts[0]}_s_{parts[1]}"
-    return f"{folder_name}_s"
+    if "TargetPP" in RawParams and RawParams["TargetPP"]:
+        try:
+            ParamsOut["TargetPP"] = int(float(RawParams["TargetPP"]))
+        except ValueError:
+            pass
+
+    if "PPSmoothing" in RawParams and RawParams["PPSmoothing"]:
+        try:
+            ParamsOut["PPSmoothing"] = float(RawParams["PPSmoothing"])
+        except ValueError:
+            pass
+
+    return ParamsOut
 
 
 def UpdateJobName(job_content: str, folder_tag: str) -> str:
