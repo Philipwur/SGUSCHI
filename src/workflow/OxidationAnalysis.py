@@ -452,4 +452,10 @@ def PlaceO2Molecules(Position: pd.DataFrame,
         O2[0] = (O2[0] + HalfFracDisp) % 1.0
 
         NewAtoms.append({'Element': 'O', 'x': O1[0], 'y': O1[1], 'z': O1[2]})
-        NewAtoms.append({'Element': 'O', 'x': O2[0], 'y': O2[1], 'z':
+        NewAtoms.append({'Element': 'O', 'x': O2[0], 'y': O2[1], 'z': O2[2]})
+
+    # Convert to DataFrame and append to existing positions
+    NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element', 'x', 'y', 'z'])
+    UpdatedPositions = pd.concat([Position, NewAtomsDF], ignore_index=True)
+
+    return UpdatedPositions
