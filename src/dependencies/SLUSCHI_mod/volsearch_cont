@@ -10,7 +10,7 @@ endif
 #only?
 set only = `getinfo.csh thmexp_only job.in`
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = `pwd`
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 set temp = `getinfo.csh temp job.in`
 sed -i '/NBANDS/d' INCAR
@@ -198,10 +198,8 @@ while ($stopflag == 0)
       head -2 CONTCAR > POSCAR
       cat lattice_predict.out >> POSCAR
       tail -n+6 CONTCAR >> POSCAR
-      python $sluschipath/OxidationStep.py
+      python "$sluschipath/../../workflow/OxidationStep.py"
       $vaspcmd jobsub >> jobsub.log
-      cp CHGCAR $nstep/.
-      cp CHG $nstep/.
       set nstep = `expr $nstep + 1`
       echo Job $nstep submitted. Waiting for job $nstep to finish... 
     endif
