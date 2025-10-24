@@ -15,6 +15,7 @@ import sys
 #from workflow import OxidationAnalysis as an
 
 
+#Old equations, need another pass
 
 def XYZTrajectoryParser(FilePath=None,
                         WorkDir=None,
@@ -131,11 +132,10 @@ def XYZTrajectoryParser(FilePath=None,
     return Positions, Energies, CellDim
 
 
-
-
-
-
 '''
+need an xyz writer, with most relevatn data (time, energy, lattice vectors, positions)
+Probably need to think about atom tracking carefully. 
+
 #NOT WORKIGN BUT MAYBE DEFUNCT
 def VolSearchParser(WorkDir=None):
     if WorkDir is None:
@@ -165,7 +165,7 @@ def VolSearchParser(WorkDir=None):
 
 # New Gen functions here
 
-
+#Think this might be defunct
 def FixElementFormatting(
     Position: pd.DataFrame, ReturnPrevNames: bool = False
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
@@ -802,6 +802,7 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
 
     
     
+'''
 #Testing OUTCAR Parser
 if __name__ == "__main__":
     OUTCARData = OutcarParser(WorkDir="../../Test/OUTCAR")
@@ -810,7 +811,7 @@ if __name__ == "__main__":
     print('Positions:', OUTCARData['Positions'], '\n')
     print('Cell Vectors:', OUTCARData['CellVectors'], '\n')
     
-    
     for key in OUTCARData['Energies']:
         print(f'{key} =', OUTCARData['Energies'][key], '\n') 
+'''
 # %%
