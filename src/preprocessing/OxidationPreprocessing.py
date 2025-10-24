@@ -1,4 +1,5 @@
 # File for preparing supercell POSCAR files for simulations
+# Will add functionality to create a supercell at some point
 #%% Imports 
 
 import pandas as pd
