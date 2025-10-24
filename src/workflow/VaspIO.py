@@ -120,7 +120,8 @@ def CheckForMLFF(WorkDir: Union[str, Path]) -> bool:
         return False
 
 
-def ReadKeyValueFile(FilePath: Path, RequiredKeys: Optional[List[str]] = None) -> Dict[str, Any]:
+def ReadKeyValueFile(FilePath: Path,
+                     RequiredKeys: Optional[List[str]] = None) -> Dict[str, Any]:
     """
     Parse a simple key=value (or key value) configuration file.
 
