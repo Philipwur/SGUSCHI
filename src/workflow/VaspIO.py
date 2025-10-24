@@ -171,7 +171,7 @@ def FixElementFormatting(
 ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
     """
     Clean element names in a DataFrame to ensure consistency for bond-finding 
-    algorithms and post processing.
+    algorithms and post processing. Useful to deal with corrupted element names.
 
     Removes suffixes such as "_x" or "/y" from element symbols in the "Element" column.
     Optionally returns the list of original unique element names for renaming later.
