@@ -1,5 +1,6 @@
 #%%
 #Suite of functions to analyse VASP data parsed by VaspIO.py
+#Cannot have dependencies
 
 #Hard coded things that could be taken from database: 
 #1. Bond Length (FindGasses), Look at ionic radii overlap
@@ -9,7 +10,7 @@ import pandas as pd
 import numpy as np
 import scipy.stats as stats
 import scipy.optimize as opt
-from typing import Optional   # ✅ Added for Python 3.7 compatibility
+from typing import Optional
 
 
 def ConvertDirectToCartesian(Position, CellDim):
@@ -279,6 +280,8 @@ def CalculateOxidationRate(N, t, CellDim, PartialPressure,
         UpperBound *= OxidationRateConversion
         return (OxRate, LowerBound, UpperBound)
 
+
+#New code
 
 def MaxwellBoltzmannVelocities(Elements, Temperature):
     '''

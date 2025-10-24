@@ -68,7 +68,6 @@ def EnsureFilesExist(workdir: Path, filenames: List[str]):
     if missing:
         raise FileNotFoundError(f"Missing required files: {', '.join(missing)}")
 
-
 def CopyFile(src: Path, dst: Path):
     """Copy a single file while ensuring destination directories exist."""
     dst.parent.mkdir(parents=True, exist_ok=True)

@@ -255,6 +255,9 @@ def main(WorkDir = None, FreezePOSCAR = False):
                                 when fixing/updating rateanalysis.
     """
     
+    if WorkDir == None:
+        WorkDir = os.getcwd()
+    
     #Hyperparameters
     if os.path.exists(os.path.join(WorkDir, '..', 'OxParams')):
         
@@ -262,10 +265,10 @@ def main(WorkDir = None, FreezePOSCAR = False):
         
         AtomicRadiusTol = OxParams['AtomicRadiusTol']
         O2Tol = OxParams['O2Tol']
-        OxygenSmoothing = OxParams['OxygenSmoothing']
+        OxygenSmoothing = OxParams['OSmoothing']
         
     else:
-        
+    #raise Error
         #Need to come up with better logic here
         
         #Presets if no Oxdiation Parameters file exists in one folder above workdir
@@ -274,14 +277,15 @@ def main(WorkDir = None, FreezePOSCAR = False):
         OxygenSmoothing = 0.001 #Oxygen Expoenential smoothign parameter. Lower = More smoothing, less responsive.
         System = ['Zr', 'C', 'O'] #System elements, used for bond finding and gas finding.
         
-    if os.path.exists(os.path.join(WorkDir, 'CovalentRadii')):
+    if os.path.exists(os.path.join(WorkDir, '..', 'CovalentRadii')):
         CovalentRadii = vio.ReadCovalentRadii(os.path.join(WorkDir, 'CovalentRadii'))
-        
+    else:
+        raise FileNotFoundError(f'CovalentRadii file not found in {WorkDir}. \
+                                \n Please provide CovalentRadii file for bond finding.')
+    
     #--------------------------- Gather Information ---------------------------
 
-    if WorkDir == None:
-        WorkDir = os.getcwd()
-    
+
     #Check to see if MLFF is used for OUTCAR parsing
     MLFF = vio.CheckForMLFF(WorkDir)
 
@@ -333,11 +337,13 @@ def main(WorkDir = None, FreezePOSCAR = False):
         TotalO2Added = RateAnalysis['Total O2 Added'].iloc[-1]
         
         i = len(RateAnalysis.index)
+        
+        #OUTCAR parser needs update
         AllPositions, _ = vio.OUTCARParser(f'{WorkDir}/{i+1}', MLFF)
         
         for Position in AllPositions:
             
-            Position = FixElementFormatting(Position)
+            Position = an.FixElementFormatting(Position)
             Count, GasIndices, _ = an.FindGases(Position, 
                                                 CellDim, 
                                                 AtomicRadiusTol = AtomicRadiusTol)
@@ -463,6 +469,7 @@ def FixRateAnalysis(WorkDir):
             i += 1
         else:
             break
+ 
     
 if __name__ == '__main__':
     
