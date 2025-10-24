@@ -80,11 +80,20 @@ def WriteTextFile(FilePath: Path, Text: str):
         
 
 def PrepareWorkingDirectory():
+    
     WorkDir = Path.cwd()
 
+    #Keys required in OxParams
+    RequiredKeys = [
+        'Temperatures',
+        'NSims',
+        'GasRatio',
+        'InitO2'
+    ]
+    
     # 1) Read and validate OxParams and input files
     OxParamsPath = WorkDir / "OxParams"
-    Params = vio.ReadOxParams(OxParamsPath)
+    Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys = RequiredKeys)
 
     RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
     EnsureFilesExist(WorkDir, RequiredFiles)
@@ -100,10 +109,10 @@ def PrepareWorkingDirectory():
     LogLines = []
     LogLines.append("Working Directory Prepared Sucessfully")
 
-    Temperatures = Params["Temperatures"]
-    NSims = Params["NSims"]
-    GasRatio = Params["GasRatio"]
-    InitO2 = Params["InitO2"]
+    Temperatures = Params[RequiredKeys[0]]
+    NSims = Params[RequiredKeys[1]]
+    GasRatio = Params[RequiredKeys[2]]
+    InitO2 = Params[RequiredKeys[3]]
 
     ForCopy = ["POTCAR", "job.in", "KPOINTS", "INCAR"]
 

@@ -6,36 +6,13 @@ import numpy as np
 import os
 from tqdm import tqdm
 import re
-import sys
 from pathlib import Path
-from typing import Optional, Tuple, Union, List
-from typing import Dict
+from typing import Optional, Any, List, Dict, Union, Tuple
 
-sys.path.append(str(Path(__file__).resolve().parents[1]))
+import sys
+
+#sys.path.append(str(Path(__file__).resolve().parents[1]))
 #from workflow import OxidationAnalysis as an
-
-
-def FixElementFormatting(Position, ReturnPrevNames = False):
-    '''
-    A function which fixes the element names in a position/velocity DataFrame so
-    elements can be comprehended by bond finding algorithms later. 
-    '''
-    if ReturnPrevNames:
-        PrevNames = Position['Element'].unique()
-
-    for i in Position['Element'].unique():
-        if '_' in i:
-            FixedName = i.split('_')[0]
-            Position.loc[Position['Element'] == i, 'Element'] = FixedName
-        elif '/' in i:
-            FixedName = i.split('/')[0]
-            Position.loc[Position['Element'] == i, 'Element'] = FixedName
-
-    if ReturnPrevNames:
-        return Position, PrevNames
-    else:
-        return Position
-
 
 
 
@@ -154,69 +131,11 @@ def XYZTrajectoryParser(FilePath=None,
     return Positions, Energies, CellDim
 
 
-def INCARParser(WorkDir=None, Parameters=None, FilePath=None):
-    if Parameters is None:
-        Parameters = ['TEBEG', 'POTIM', 'NSW']
-    if WorkDir is None:
-        WorkDir = os.getcwd()
-    if not FilePath:
-        FilePath = os.path.join(WorkDir, 'INCAR')
-    INCARValues = {param: None for param in Parameters}
-    with open(FilePath, 'r') as f:
-        for line in f:
-            parts = line.strip().split('=')
-            if len(parts) == 2:
-                Key = parts[0].strip()
-                Value = parts[1].strip()
-                if Key in INCARValues:
-                    try:
-                        if '.' in Value:
-                            INCARValues[Key] = float(Value)
-                        else:
-                            INCARValues[Key] = int(Value)
-                    except ValueError:
-                        INCARValues[Key] = Value
-    return [INCARValues[param] for param in Parameters]
+
 
 
 
 '''
-#NOT WORKING
-def OUTCARParser(WorkDir=None, MLFF=False):
-    if WorkDir is None:
-        WorkDir = os.getcwd()
-    _, StepSize, TotalSteps = INCARParser(WorkDir)
-    _, AtomInfo, CellDim = ContcarParser(WorkDir, ReadPOSCAR=True)
-    NumAtoms = AtomInfo['Number'].sum()
-    AllEnergies = []
-    AllPositions = []
-    if not MLFF:
-        PositionTag = 'POSITION'
-        EnergyTag = 'FREE ENERGIE OF THE ION-ELECTRON SYSTEM (eV)'
-    else:
-        PositionTag = 'POSITION                                       TOTAL-FORCE (eV/Angst) (ML)'
-        EnergyTag = 'ML FREE ENERGIE OF THE ION-ELECTRON SYSTEM (eV)'
-
-    with open(os.path.join(WorkDir, 'OUTCAR')) as f:
-        for line in f:
-            if PositionTag in line:
-                next(f)
-                Position = [[float(x) for x in next(f).strip().split()[0:3]]
-                            for _ in range(NumAtoms)]
-                Position = pd.DataFrame(Position, columns=['x', 'y', 'z'])
-                Position = AddElementsToPos(Position, AtomInfo)
-                Position = an.ConvertCartesianToDirect(Position, CellDim)
-                AllPositions.append(Position)
-            if EnergyTag in line:
-                next(f)
-                next_line = next(f).strip().split()
-                Energy = float(next_line[-2])
-                AllEnergies.append(Energy)
-
-    Times = [(i + 1) * StepSize for i in range(len(AllEnergies))]
-    AllEnergies = pd.DataFrame({'Time (fs)': Times, 'Energy (eV)': AllEnergies})
-    return AllPositions, AllEnergies
-
 #NOT WORKIGN BUT MAYBE DEFUNCT
 def VolSearchParser(WorkDir=None):
     if WorkDir is None:
@@ -242,244 +161,274 @@ def VolSearchParser(WorkDir=None):
         TimeOffset = Energies['Time (fs)'].iloc[-1]
     AllEnergies = pd.concat(FlattenedEnergies, ignore_index=True)
     return AllPositions, AllEnergies
-
-# In theory we dont need this anymore
-def AddElementsToPos(Position, AtomInfo):
-    """
-    Adds an 'Element' column to an atomic position or velocity DataFrame.
-    """
-    Elements = np.repeat(AtomInfo['Element'].values, AtomInfo['Number'].values)
-    Position.insert(0, 'Element', Elements)
-    return Position
 '''
 
-#%% New Gen functions here
+# New Gen functions here
 
-def CheckForMLFF(WorkDir):
-    try:
-        MLFF = INCARParser(WorkDir, ['ML_LMLFF'])
-        if MLFF[0] == '.TRUE.':
-            MLFF = True
-        else:
-            MLFF = False
-    except Exception:
-        MLFF = False
-    return MLFF
 
-def ReadOxParams(FilePath: Path) -> Dict[str, object]:
+def FixElementFormatting(
+    Position: pd.DataFrame, ReturnPrevNames: bool = False
+) -> Union[pd.DataFrame, Tuple[pd.DataFrame, List[str]]]:
     """
-    Parse OxParams key=value lines.
+    Clean element names in a DataFrame to ensure consistency for bond-finding 
+    algorithms and post processing.
 
-    Supports Temperatures specified either with or without brackets, e.g.:
-      Temperatures = [873, 973, 1073, 1273]
-      Temperatures = 873, 973, 1073, 1273
+    Removes suffixes such as "_x" or "/y" from element symbols in the "Element" column.
+    Optionally returns the list of original unique element names for renaming later.
+
+    Args:
+        Position: DataFrame containing an "Element" column to clean.
+        ReturnPrevNames: If True, also return the list of previous element names.
 
     Returns:
-      {
-        "Temperatures": ["873", "973", ...],  # strings (safe for folder names)
-        "NSims": int,
-        "GasRatio": float,
-        "InitO2": int,
-        # Optional passthroughs if present:
-        "AtomicRadiusTol": float,
-        "TargetPP": int,
-        "PPSmoothing": float,
-      }
+        Position if ReturnPrevNames is False,
+        (Position, PrevNames) if True.
     """
-    if not FilePath.exists():
-        raise FileNotFoundError("OxParams not found at: {}".format(FilePath))
+    if ReturnPrevNames:
+        PrevNames = Position["Element"].unique().tolist()
 
-    # --- Read raw key/value pairs ---
+    for Elem in Position["Element"].unique():
+        if "_" in Elem:
+            FixedName = Elem.split("_")[0]
+            Position.loc[Position["Element"] == Elem, "Element"] = FixedName
+        elif "/" in Elem:
+            FixedName = Elem.split("/")[0]
+            Position.loc[Position["Element"] == Elem, "Element"] = FixedName
+
+    if ReturnPrevNames:
+        return Position, PrevNames
+    else:
+        return Position
+    
+    
+def CheckForMLFF(WorkDir: Union[str, Path]) -> bool:
+    """
+    Check whether a VASP INCAR file enables the machine-learning force field (MLFF).
+    Checks for the parameter `ML_LMLFF`.
+    The parameter is expected to be either `.TRUE.` or `.FALSE.` (VASP-style logicals).
+
+    Args:
+        WorkDir (Union[str, Path]):
+            Path to the INCAR file. 
+            Must reference an existing INCAR file, not just a directory.
+
+    Returns:
+        bool:
+            True if `ML_LMLFF = .TRUE.` is present in the INCAR file.
+
+    Raises:
+        ValueError:
+            If `WorkDir` does not point to a file named 'INCAR'.
+        FileNotFoundError:
+            If the INCAR file cannot be found.
+    """
+    # --- Validate path ---
+    if str(WorkDir).split("/")[-1] != "INCAR":
+        raise ValueError("WorkDir must point to an INCAR file.")
+
+    try:
+        # Ensure Path object and read file
+        IncarPath = Path(WorkDir)
+        Params = ReadKeyValueFile(IncarPath, RequiredKeys=["ML_LMLFF"])
+        MLFFValue = Params.get("ML_LMLFF", "").strip().upper()
+        return MLFFValue == ".TRUE."
+    
+    except Exception:
+        return False
+
+
+def ReadKeyValueFile(FilePath: Path, RequiredKeys: Optional[List[str]] = None) -> Dict[str, Any]:
+    """
+    Parse a simple key=value (or key value) configuration file.
+
+    Supports:
+      - Inline comments beginning with '#' or '!'
+      - Empty lines and full-line comments
+      - Flexible spacing around '='
+      - Optional enforcement of required keys
+
+    Works with files like INCAR, job.in, OxParams, or CovalentRadii.
+
+    Args:
+        FilePath (Path): Path to the input configuration file.
+        RequiredKeys (Optional[List[str]]): List of required parameter names.
+            If provided, the function raises ValueError if any are missing.
+
+    Returns:
+        Dict[str, Any]: Dictionary of parsed key-value pairs as strings.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If a required key is missing.
+    """
+
+    if not FilePath.exists():
+        raise FileNotFoundError("Configuration file not found at: {}".format(FilePath))
+
     RawParams: Dict[str, str] = {}
+
     with FilePath.open("r", encoding="utf-8") as File:
         for Line in File:
             Line = Line.strip()
-            if not Line or Line.startswith("#") or "=" not in Line:
+            if not Line:
                 continue
-            Key, Value = [x.strip() for x in Line.split("=", 1)]
-            RawParams[Key] = Value
 
-    # --- Helper functions ---
-    def ParseTemperatures(Value: str) -> List[str]:
-        """Extract numeric temperature tokens from comma/space-separated lists with or without brackets."""
-        Cleaned = Value.strip().strip("[](){}")
-        Tokens = re.split(r"[,\s]+", Cleaned)
-        Temperatures: List[str] = []
-        for Token in Tokens:
-            if not Token:
+            # Remove full-line comments
+            if Line.startswith("#") or Line.startswith("!"):
                 continue
-            Match = re.search(r"-?\d+(?:\.\d+)?", Token)
-            if Match:
-                Temperatures.append(Match.group(0))
-        if not Temperatures:
-            raise ValueError("Could not parse Temperatures from: {!r}".format(Value))
-        return Temperatures
 
-    def Require(Key: str) -> str:
-        if Key not in RawParams or RawParams[Key] == "":
-            raise ValueError("{} must be provided in OxParams.".format(Key))
-        return RawParams[Key]
+            # Remove inline comments (after # or !)
+            Line = re.split(r"[#!]", Line, 1)[0].strip()
+            if not Line:
+                continue
 
-    # --- Parse required fields ---
-    Temperatures = ParseTemperatures(Require("Temperatures"))
+            # Accept either "key = value" or "key value"
+            if "=" in Line:
+                Key, Value = [x.strip() for x in Line.split("=", 1)]
+            else:
+                Parts = Line.split(None, 1)
+                if len(Parts) != 2:
+                    continue
+                Key, Value = Parts[0].strip(), Parts[1].strip()
 
-    try:
-        NSims = int(Require("NSims"))
-    except ValueError as Err:
-        raise ValueError("NSims must be an integer.") from Err
+            if Key:
+                RawParams[Key] = Value
 
-    try:
-        GasRatio = float(Require("GasRatio"))
-    except ValueError as Err:
-        raise ValueError("GasRatio must be a float.") from Err
+    # --- Verify required keys ---
+    if RequiredKeys:
+        Missing = [Key for Key in RequiredKeys if Key not in RawParams or RawParams[Key] == ""]
+        if Missing:
+            raise ValueError("Missing required parameters: {}".format(", ".join(Missing)))
 
-    try:
-        InitO2 = int(Require("InitO2"))
-    except ValueError as Err:
-        raise ValueError("InitO2 must be an integer.") from Err
+    return RawParams
 
-    # --- Optional passthroughs ---
-    ParamsOut: Dict[str, object] = {
-        "Temperatures": Temperatures,
-        "NSims": NSims,
-        "GasRatio": GasRatio,
-        "InitO2": InitO2,
-    }
 
-    if "AtomicRadiusTol" in RawParams and RawParams["AtomicRadiusTol"]:
-        try:
-            ParamsOut["AtomicRadiusTol"] = float(RawParams["AtomicRadiusTol"])
-        except ValueError:
-            pass  # ignore if not numeric
-
-    if "TargetPP" in RawParams and RawParams["TargetPP"]:
-        try:
-            ParamsOut["TargetPP"] = int(float(RawParams["TargetPP"]))
-        except ValueError:
-            pass
-
-    if "PPSmoothing" in RawParams and RawParams["PPSmoothing"]:
-        try:
-            ParamsOut["PPSmoothing"] = float(RawParams["PPSmoothing"])
-        except ValueError:
-            pass
-
-    return ParamsOut
-
-def ReadPOSCAR(
-    workdir=None,
-    filename=None,
-    give_velocities=False
-):
+def ReadPoscar(
+    WorkDir: Optional[Union[str, Path]] = None,
+    FileName: Optional[Union[str, Path]] = None,
+    GiveVelocities: bool = False
+) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]]:
     """
-    Read a VASP POSCAR/CONTCAR-like file.
-    """
-    def next_nonempty(idx, lines):
-        while idx < len(lines) and not lines[idx].strip():
-            idx += 1
-        return idx
+    Read a VASP POSCAR or CONTCAR file.
 
-    def parse_three_floats(line):
-        vals = []
-        for tok in line.split():
+    Automatically locates POSCAR/CONTCAR in the given directory, parses lattice vectors,
+    atomic positions, and optionally velocities. First tries for POSCAR unless specified in FileName.
+
+    Args:
+        WorkDir: Directory containing POSCAR or CONTCAR (defaults to current directory).
+        FileName: Specific file to read (overrides automatic POSCAR/CONTCAR search).
+        GiveVelocities: If True, return velocity data when available.
+
+    Returns:
+        (Position, CellDim) or (Position, CellDim, Velocities)
+        where each is a pandas DataFrame.
+    """
+    def NextNonEmpty(Index: int, Lines: list) -> int:
+        while Index < len(Lines) and not Lines[Index].strip():
+            Index += 1
+        return Index
+
+    def ParseThreeFloats(Line: str) -> list:
+        Values = []
+        for Token in Line.split():
             try:
-                vals.append(float(tok))
-                if len(vals) == 3:
+                Values.append(float(Token))
+                if len(Values) == 3:
                     break
             except ValueError:
                 continue
-        if len(vals) != 3:
-            raise ValueError("Could not parse 3 numeric coords from line: %r" % line)
-        return vals
+        if len(Values) != 3:
+            raise ValueError("Could not parse 3 numeric coords from line: %r" % Line)
+        return Values
 
-    def expand_elements(elem_line, num_line):
-        out = []
-        for el, n in zip(elem_line, num_line):
-            out.extend([el] * int(n))
-        return out
+    def ExpandElements(ElemLine: list, NumLine: list) -> list:
+        Output = []
+        for El, N in zip(ElemLine, NumLine):
+            Output.extend([El] * int(N))
+        return Output
 
-    def cart_to_frac(cart, cell):
-        inv_cell = np.linalg.inv(cell)
-        return cart @ inv_cell
+    def CartToFrac(Cart: np.ndarray, Cell: np.ndarray) -> np.ndarray:
+        InvCell = np.linalg.inv(Cell)
+        return Cart @ InvCell
 
-    base = Path(workdir) if workdir is not None else Path.cwd()
-    if filename is None:
-        path = base / "POSCAR"
-        if not path.exists():
-            alt = base / "CONTCAR"
-            if alt.exists():
-                path = alt
+    Base = Path(WorkDir) if WorkDir is not None else Path.cwd()
+    if FileName is None:
+        PathFile = Base / "POSCAR"
+        if not PathFile.exists():
+            Alt = Base / "CONTCAR"
+            if Alt.exists():
+                PathFile = Alt
             else:
-                raise FileNotFoundError("No POSCAR or CONTCAR found in %s" % base)
+                raise FileNotFoundError("No POSCAR or CONTCAR found in %s" % Base)
     else:
-        p = Path(filename)
-        path = p if p.is_absolute() else (base / p)
-    if not path.exists():
-        raise FileNotFoundError("File not found: %s" % path)
+        P = Path(FileName)
+        PathFile = P if P.is_absolute() else (Base / P)
+    if not PathFile.exists():
+        raise FileNotFoundError("File not found: %s" % PathFile)
 
-    with path.open("r", encoding="utf-8") as f:
-        lines = [ln.rstrip() for ln in f]
-    start = next_nonempty(0, lines)
-    lines = lines[start:]
+    with PathFile.open("r", encoding="utf-8") as F:
+        Lines = [Ln.rstrip() for Ln in F]
+    Start = NextNonEmpty(0, Lines)
+    Lines = Lines[Start:]
 
-    idx = next_nonempty(1, lines)
-    scale = float(lines[idx].split()[0])
-    idx = next_nonempty(idx + 1, lines)
+    Idx = NextNonEmpty(1, Lines)
+    Scale = float(Lines[Idx].split()[0])
+    Idx = NextNonEmpty(Idx + 1, Lines)
 
-    cell_rows = []
+    CellRows = []
     for _ in range(3):
-        cell_rows.append([float(x) * scale for x in lines[idx].split()[:3]])
-        idx += 1
-    cell = np.array(cell_rows, dtype=float)
-    CellDim = pd.DataFrame(cell_rows, columns=["x", "y", "z"])
+        CellRows.append([float(X) * Scale for X in Lines[Idx].split()[:3]])
+        Idx += 1
+    Cell = np.array(CellRows, dtype=float)
+    CellDim = pd.DataFrame(CellRows, columns=["x", "y", "z"])
 
-    idx = next_nonempty(idx, lines)
-    elem_line = lines[idx].split()
-    idx = next_nonempty(idx + 1, lines)
-    num_line = lines[idx].split()
-    counts = [int(x) for x in num_line]
-    n_atoms = sum(counts)
-    elements_expanded = expand_elements(elem_line, num_line)
+    Idx = NextNonEmpty(Idx, Lines)
+    ElemLine = Lines[Idx].split()
+    Idx = NextNonEmpty(Idx + 1, Lines)
+    NumLine = Lines[Idx].split()
+    Counts = [int(X) for X in NumLine]
+    NAtoms = sum(Counts)
+    ElementsExpanded = ExpandElements(ElemLine, NumLine)
 
-    idx = next_nonempty(idx + 1, lines)
-    header = lines[idx].strip().lower()
-    if header.startswith("s"):
-        idx = next_nonempty(idx + 1, lines)
-        header = lines[idx].strip().lower()
+    Idx = NextNonEmpty(Idx + 1, Lines)
+    Header = Lines[Idx].strip().lower()
+    if Header.startswith("s"):
+        Idx = NextNonEmpty(Idx + 1, Lines)
+        Header = Lines[Idx].strip().lower()
 
-    is_cart = header.startswith("c")
+    IsCart = Header.startswith("c")
 
-    idx = next_nonempty(idx + 1, lines)
-    coords = []
-    for _ in range(n_atoms):
-        if idx >= len(lines):
+    Idx = NextNonEmpty(Idx + 1, Lines)
+    Coords = []
+    for _ in range(NAtoms):
+        if Idx >= len(Lines):
             raise ValueError("Unexpected end of file while reading positions.")
-        coords.append(parse_three_floats(lines[idx]))
-        idx += 1
-    coords = np.array(coords, dtype=float)
-    frac = cart_to_frac(coords, cell) if is_cart else coords
+        Coords.append(ParseThreeFloats(Lines[Idx]))
+        Idx += 1
+    Coords = np.array(Coords, dtype=float)
+    Frac = CartToFrac(Coords, Cell) if IsCart else Coords
 
-    Position = pd.DataFrame(frac, columns=["x", "y", "z"])
-    Position.insert(0, "Element", elements_expanded)
+    Position = pd.DataFrame(Frac, columns=["x", "y", "z"])
+    Position.insert(0, "Element", ElementsExpanded)
 
-    if not give_velocities:
+    if not GiveVelocities:
         return Position, CellDim
 
-    idx = next_nonempty(idx, lines)
-    vels = []
-    for _ in range(n_atoms):
-        if idx >= len(lines) or not lines[idx].strip():
+    Idx = NextNonEmpty(Idx, Lines)
+    Vels = []
+    for _ in range(NAtoms):
+        if Idx >= len(Lines) or not Lines[Idx].strip():
             break
         try:
-            vels.append(parse_three_floats(lines[idx]))
+            Vels.append(ParseThreeFloats(Lines[Idx]))
         except ValueError:
             break
-        idx += 1
+        Idx += 1
 
     Velocities = None
-    if len(vels) == n_atoms:
-        Velocities = pd.DataFrame(vels, columns=["vx", "vy", "vz"])
-        Velocities.insert(0, "Element", elements_expanded)
+    if len(Vels) == NAtoms:
+        Velocities = pd.DataFrame(Vels, columns=["vx", "vy", "vz"])
+        Velocities.insert(0, "Element", ElementsExpanded)
 
     if Velocities is not None:
         return Position, CellDim, Velocities
@@ -487,50 +436,381 @@ def ReadPOSCAR(
         return Position, CellDim
 
 
-def WritePOSCAR(WorkDir,
-                Position,
-                CellDim,
-                Velocities=None,
-                FileName=None,
-                Title="Structure generated by SLUSCHI and SGUSCHI"):
+def WritePoscar(
+    WorkDir: Union[str, Path],
+    Position: pd.DataFrame,
+    CellDim: pd.DataFrame,
+    Velocities: Optional[pd.DataFrame] = None,
+    FileName: Optional[str] = None,
+    Title: str = "Structure generated by SLUSCHI + SGUSCHI"
+) -> None:
     """
-    Writes a VASP-format POSCAR file.
+    Writes a VASP-format POSCAR file from internal CellDim and Position pd.
+
+    Args:
+        WorkDir: Directory in which to write the POSCAR file.
+        Position: DataFrame with columns ['Element', 'x', 'y', 'z'] containing atomic positions (fractional).
+        CellDim: 3×3 DataFrame with columns ['x', 'y', 'z'] defining lattice vectors.
+        Velocities: Optional DataFrame with columns ['Element', 'vx', 'vy', 'vz'] for atomic velocities.
+        FileName: Optional filename (defaults to 'POSCAR').
+        Title: Title line to include in the POSCAR header.
+
+    Returns:
+        None
     """
     if not os.path.exists(WorkDir):
         os.makedirs(WorkDir)
+
     if FileName is None:
         FileName = "POSCAR"
-    filepath = os.path.join(WorkDir, FileName)
-    required_cols = {"Element", "x", "y", "z"}
-    if not required_cols.issubset(Position.columns):
-        raise ValueError("Position DataFrame must contain columns: %s" % required_cols)
+
+    FilePath = os.path.join(WorkDir, FileName)
+
+    RequiredCols = {"Element", "x", "y", "z"}
+    if not RequiredCols.issubset(Position.columns):
+        raise ValueError("Position DataFrame must contain columns: %s" % RequiredCols)
+
     if not {"x", "y", "z"}.issubset(CellDim.columns) or len(CellDim) != 3:
-        raise ValueError("CellDim must be a 3x3 DataFrame with columns ['x','y','z'].")
+        raise ValueError("CellDim must be a 3×3 DataFrame with columns ['x','y','z'].")
 
-    atom_counts = Position["Element"].value_counts(sort=False)
-    element_order = list(atom_counts.index)
+    AtomCounts = Position["Element"].value_counts(sort=False)
+    ElementOrder = list(AtomCounts.index)
 
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("%s\n" % Title)
-        f.write("1.0\n")
+    with open(FilePath, "w", encoding="utf-8") as F:
+        F.write("%s\n" % Title)
+        F.write("1.0\n")
         for i in range(3):
-            f.write("%22.16f %22.16f %22.16f\n" % (
-                CellDim.iloc[i]['x'], CellDim.iloc[i]['y'], CellDim.iloc[i]['z']))
-        f.write("   " + "   ".join(element_order) + "\n")
-        f.write("   " + "   ".join(str(atom_counts[e]) for e in element_order) + "\n")
-        f.write("Direct\n")
-        for elem in element_order:
-            subset = Position[Position["Element"] == elem]
-            for _, atom in subset.iterrows():
-                f.write("%22.16f %22.16f %22.16f\n" % (
-                    atom['x'], atom['y'], atom['z']))
-        if Velocities is not None and not Velocities.empty:
-            f.write("\n")
-            for elem in element_order:
-                subset = Velocities[Velocities["Element"] == elem]
-                for _, v in subset.iterrows():
-                    f.write("%22.16f %22.16f %22.16f\n" % (
-                        v['vx'], v['vy'], v['vz']))
-    return
+            F.write(
+                "%22.16f %22.16f %22.16f\n"
+                % (CellDim.iloc[i]["x"], CellDim.iloc[i]["y"], CellDim.iloc[i]["z"])
+            )
+        F.write("   " + "   ".join(ElementOrder) + "\n")
+        F.write("   " + "   ".join(str(AtomCounts[E]) for E in ElementOrder) + "\n")
+        F.write("Direct\n")
+        for Elem in ElementOrder:
+            Subset = Position[Position["Element"] == Elem]
+            for _, Atom in Subset.iterrows():
+                F.write("%22.16f %22.16f %22.16f\n" % (Atom["x"], Atom["y"], Atom["z"]))
 
+        if Velocities is not None and not Velocities.empty:
+            F.write("\n")
+            for Elem in ElementOrder:
+                Subset = Velocities[Velocities["Element"] == Elem]
+                for _, V in Subset.iterrows():
+                    F.write("%22.16f %22.16f %22.16f\n" % (V["vx"], V["vy"], V["vz"]))
+
+
+def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Parse a VASP OUTCAR into a structured dictionary for saving and Postproc.
+
+    Args:
+        WorkDir (str or Path):
+            Path to either a directory with OUTCAR file, or renamed OUTCAR file.
+            If a directory is provided, function searches for OUTCAR
+    
+    Returns:
+        Dict[str, Any]: A dictionary containing parsed simulation data with physical units:
+
+        {
+            "Temperature": float or None,
+                Average target temperature from INCAR header (K).
+
+            "TimesFs": List[float],
+                Cumulative simulation time per ionic step (fs).
+                Computed as (step_index + 1) × POTIM.
+
+            "Energies": pd.DataFrame,
+                Tabular data containing one row per ionic step, with columns:
+
+                - Step (int): Step index (1-based).
+                - EFree (float): Free energy of the ion–electron system (eV).
+                - ETotal (float): Total energy (electronic + ionic) (eV).
+                - EFermi (float): Fermi energy level (eV).
+                - Temperature (float): Instantaneous ionic temperature (K), if available.
+                - Pressure (float): Instantaneous pressure (bar if available, else kB).
+                - Volume (float): Cell volume (Å³).
+                - MaxForce (float): Maximum atomic force magnitude (eV/Å).
+                - StressXX, StressYY, StressZZ (float): Normal stress components (kB).
+                - StressXY, StressYZ, StressZX (float): Shear stress components (kB).
+
+            "Positions": List[pd.DataFrame],
+                One DataFrame per ionic step containing fractional coordinates:
+
+                Columns:
+                    - Element (str): Element symbol (e.g., "Zr", "O", "C").
+                    - x, y, z (float): Fractional atomic positions (unitless).
+
+            "CellVectors": pd.DataFrame,
+                3×3 lattice vectors (Å) defining the simulation cell.
+                Rows correspond to a, b, and c vectors; columns are ["x", "y", "z"].
+                For ISIF=2 runs, the cell is fixed across all steps.
+        }
+
+    Notes:
+        - Uses only the OUTCAR file (no dependency on INCAR, POSCAR, etc.).
+        - Automatically detects energies, forces, and stresses across all steps.
+        - Converts Cartesian coordinates to fractional using the fixed simulation cell.
+        - Handles both standard and MLFF-type OUTCAR formats transparently.
+    """
+    
+    # --- Resolve OUTCAR path ---
+    WorkDir = Path(WorkDir)
+    FilePath = WorkDir if (WorkDir.is_file() and WorkDir.name == "OUTCAR") else (WorkDir / "OUTCAR")
+    if not FilePath.exists():
+        raise FileNotFoundError("OUTCAR not found at: {}".format(FilePath))
+
+    # Read OUTCAR
+    OutcarText = FilePath.read_text(encoding="utf-8", errors="ignore")
+    Lines = OutcarText.splitlines()
+    Header = OutcarText[:150000]
+
+       # --- Header tags: POTIM, TEBEG, TEEND ---
+    def GetTagFloat(Tag: str) -> Optional[float]:
+        Match = re.search(r"\b%s\s*=\s*([-\d\.Ee+]+)" % Tag, Header)
+        return float(Match.group(1)) if Match else None
+
+    Potim = GetTagFloat("POTIM")
+    TEBEG = GetTagFloat("TEBEG")
+    TEEND = GetTagFloat("TEEND")
+    TargetTemperature = (
+        0.5 * (TEBEG + TEEND) if (TEBEG is not None and TEEND is not None)
+        else (TEBEG if TEBEG is not None else (TEEND if TEEND is not None else None))
+    )
+
+    # --- NIONS ---
+    NionsMatch = re.search(r"\bNIONS\s*=\s*(\d+)", OutcarText)
+    Nions = int(NionsMatch.group(1)) if NionsMatch else 0
+
+    # --- Species (first contiguous POTCAR block) + counts → per-atom element labels ---
+    PotcarLineIndices = [I for I, L in enumerate(Lines) if "POTCAR:" in L]
+    Species: List[str] = []
+    if PotcarLineIndices:
+        StartIdx = PotcarLineIndices[0]
+        BlockLines: List[str] = []
+        I = StartIdx
+        while I < len(Lines) and "POTCAR:" in Lines[I]:
+            BlockLines.append(Lines[I])
+            I += 1
+        Periodic = set("""
+            H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr
+            Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe
+            Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu
+            Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn
+            Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr
+            Rf Db Sg Bh Hs Mt Ds Rg Cn Fl Lv Ts Og
+        """.split())
+        
+        for L in BlockLines:
+            Payload = L.split("POTCAR:")[1]
+            Tokens = Payload.replace("PAW_PBE", " ").replace("PAW-LDA", " ").split()
+            Element = None
+            for Tok in Tokens:
+                Base = Tok.split("_")[0]
+                if Base in Periodic:
+                    Element = Base
+                    break
+            if Element:
+                Species.append(Element)
+
+    CountsMatch = re.search(r"ions\s+per\s+type\s*=\s*([0-9\.\s]+)", OutcarText, flags=re.I)
+    Counts = [int(X) for X in CountsMatch.group(1).split()] if CountsMatch else []
+    ElementsExpanded: List[str] = []
+    if Species and Counts and len(Species) == len(Counts):
+        for El, Cnt in zip(Species, Counts):
+            ElementsExpanded.extend([El] * Cnt)
+    elif Nions:
+        ElementsExpanded = ["X"] * Nions
+
+    # --- Cell (ISIF=2 → fixed cell). Parse the first 'direct lattice vectors' block ---
+    def ParseFirstCell(OutcarLines: List[str]) -> Optional[pd.DataFrame]:
+        for I, L in enumerate(OutcarLines):
+            if re.search(r"direct\s+lattice\s+vectors", L, flags=re.I):
+                Rows: List[List[float]] = []
+                J = I + 1
+                while J < len(OutcarLines) and len(Rows) < 3:
+                    Floats = re.findall(r"[-+]?\d*\.?\d+(?:[Ee][+-]?\d+)?", OutcarLines[J])
+                    if len(Floats) >= 3:
+                        Rows.append([float(Floats[0]), float(Floats[1]), float(Floats[2])])
+                    J += 1
+                if len(Rows) == 3:
+                    return pd.DataFrame(Rows, columns=["x", "y", "z"])
+        return None
+
+    CellVectors = ParseFirstCell(Lines)
+    if CellVectors is not None:
+        CellMat = CellVectors.values
+        try:
+            CellInv = np.linalg.inv(CellMat)
+        except np.linalg.LinAlgError:
+            CellInv = None
+        Volume = float(abs(np.linalg.det(CellMat)))
+    else:
+        CellVectors = pd.DataFrame([[np.nan] * 3] * 3, columns=["x", "y", "z"])
+        CellMat = None
+        CellInv = None
+        Volume = np.nan
+
+    # --- Global events for robust last-step values (EFermi, Temp, Pressure, Stress) ---
+    GlobalEvents: List[tuple] = []
+    for M in re.finditer(r"\bE-fermi\s*:\s*([-\d\.Ee+]+)", OutcarText):
+        GlobalEvents.append((M.start(), "Fermi", float(M.group(1))))
+    for M in re.finditer(r"temperature\s+([-\d\.Ee+]+)\s*K", OutcarText, flags=re.I):
+        GlobalEvents.append((M.start(), "Temp", float(M.group(1))))
+    for M in re.finditer(r"total\s+pressure\s*=\s*([-\d\.Ee+]+)\s*kB", OutcarText, flags=re.I):
+        GlobalEvents.append((M.start(), "PressKB", float(M.group(1))))
+    for M in re.finditer(r"\bin kB\s+([-+\d\.\sEe]+)", OutcarText):
+        Nums = [float(X) for X in re.findall(r"[-+]?\d*\.?\d+(?:[Ee][+-]?\d+)?", M.group(1))]
+        if len(Nums) >= 6:
+            GlobalEvents.append((M.start(), "Stress", Nums[:6]))
+    GlobalEvents.sort(key=lambda T: T[0])
+
+    EventIdx = 0
+    EFermiLast = np.nan
+    TempLast = np.nan
+    PressLastKB = np.nan
+    StressLast = [np.nan] * 6
+
+    def UpdateGlobals(UptoOffset: int) -> None:
+        nonlocal EventIdx, EFermiLast, TempLast, PressLastKB, StressLast
+        while EventIdx < len(GlobalEvents) and GlobalEvents[EventIdx][0] <= UptoOffset:
+            _, Kind, Payload = GlobalEvents[EventIdx]
+            if Kind == "Fermi":
+                EFermiLast = float(Payload)
+            elif Kind == "Temp":
+                TempLast = float(Payload)
+            elif Kind == "PressKB":
+                PressLastKB = float(Payload)
+            elif Kind == "Stress":
+                StressLast = list(Payload)
+            EventIdx += 1
+
+    # --- Step windows (robust for standard & MLFF prints) ---
+    PosHeads = list(re.finditer(r"\n\s*POSITION\s+TOTAL-FORCE.*?\n", OutcarText))
+    NumSteps = len(PosHeads)
+
+    Positions: List[pd.DataFrame] = []
+    Rows: List[Dict[str, Any]] = []
+
+    for I, Head in enumerate(PosHeads):
+        Start = Head.end()
+        End = PosHeads[I + 1].start() if (I + 1) < NumSteps else len(OutcarText)
+
+        # Capture globals seen up to this step
+        UpdateGlobals(Start)
+
+        Window = OutcarText[Start:End]
+        WLines = Window.splitlines()
+
+        # Skip dashed separator if present
+        LineIdx = 0
+        if LineIdx < len(WLines) and set(WLines[LineIdx].strip()) == set("-"):
+            LineIdx += 1
+
+        # Parse Cartesian positions and forces for Nions lines
+        Coords: List[List[float]] = []
+        Forces: List[List[float]] = []
+        for _ in range(Nions):
+            if LineIdx >= len(WLines):
+                break
+            Parts = re.findall(r"[-+]?\d*\.?\d+(?:[Ee][+-]?\d+)?", WLines[LineIdx])
+            if len(Parts) >= 3:
+                Coords.append([float(Parts[0]), float(Parts[1]), float(Parts[2])])
+                if len(Parts) >= 6:
+                    Forces.append([float(Parts[3]), float(Parts[4]), float(Parts[5])])
+            LineIdx += 1
+
+        # Convert to FRACTIONAL coordinates
+        PosArr = np.array(Coords, dtype=float) if Coords else np.zeros((0, 3), dtype=float)
+        if PosArr.size and (CellInv is not None):
+            FracArr = PosArr.dot(CellInv)
+        else:
+            FracArr = PosArr.copy()
+        Position = pd.DataFrame(FracArr, columns=["x", "y", "z"])
+        if ElementsExpanded and len(ElementsExpanded) == len(Position):
+            Position.insert(0, "Element", ElementsExpanded)
+        else:
+            Position.insert(0, "Element", ["X"] * len(Position))
+        Positions.append(Position)
+
+        # Max force magnitude
+        MaxForce = np.nan
+        if Forces:
+            FArr = np.array(Forces, dtype=float)
+            MaxForce = float(np.sqrt((FArr ** 2).sum(axis=1)).max())
+
+        # Energies in this window (use last occurrence)
+        EFree = np.nan
+        Hits = list(re.finditer(r"free\s+energy\s+TOTEN\s*=\s*([-\d\.Ee+]+)", Window, flags=re.I))
+        if Hits:
+            EFree = float(Hits[-1].group(1))
+
+        ETotal = np.nan
+        Hits = list(re.finditer(r"(?:energy\s+without\s+entropy|energy\(sigma->0\))\s*=\s*([-\d\.Ee+]+)", Window, flags=re.I))
+        if Hits:
+            ETotal = float(Hits[-1].group(1))
+        if np.isnan(ETotal):
+            ETotal = EFree
+
+        # Per-window temperature, pressure, EFermi, stress with global fallbacks
+        MTemp = list(re.finditer(r"temperature\s+([-\d\.Ee+]+)\s*K", Window, flags=re.I))
+        StepTemp = float(MTemp[-1].group(1)) if MTemp else TempLast
+
+        MPress = list(re.finditer(r"total\s+pressure\s*=\s*([-\d\.Ee+]+)\s*kB", Window, flags=re.I))
+        StepPress = float(MPress[-1].group(1)) if MPress else PressLastKB
+
+        MFermi = list(re.finditer(r"\bE-fermi\s*:\s*([-\d\.Ee+]+)", Window))
+        StepFermi = float(MFermi[-1].group(1)) if MFermi else EFermiLast
+
+        MStress = list(re.finditer(r"\bin kB\s+([-+\d\.\sEe]+)", Window))
+        if MStress:
+            Nums = [float(X) for X in re.findall(r"[-+]?\d*\.?\d+(?:[Ee][+-]?\d+)?", MStress[-1].group(1))]
+            StepStress = Nums[:6] if len(Nums) >= 6 else StressLast
+        else:
+            StepStress = StressLast
+
+        # Advance globals to end-of-window (helps the *next* step's fallback)
+        UpdateGlobals(End)
+
+        StressXX, StressYY, StressZZ, StressXY, StressYZ, StressZX = (StepStress + [np.nan] * 6)[:6]
+
+        Rows.append({
+            "Step": I + 1,
+            "EFree": EFree,
+            "ETotal": ETotal,
+            "EFermi": StepFermi,
+            "Temperature": StepTemp,   # K
+            "Pressure": StepPress,     # kB
+            "Volume": Volume,          # Å^3
+            "MaxForce": MaxForce,      # eV/Å
+            "StressXX": StressXX, "StressYY": StressYY, "StressZZ": StressZZ,
+            "StressXY": StressXY, "StressYZ": StressYZ, "StressZX": StressZX,
+        })
+
+    # --- Times (fs) from POTIM ---
+    TimesFs = [float((I + 1) * (Potim if Potim is not None else 1.0)) for I in range(NumSteps)]
+
+    Energies = pd.DataFrame(Rows)
+
+    return {
+        "Temperature": float(TargetTemperature) if TargetTemperature is not None else None,
+        "TimesFs": TimesFs,
+        "Energies": Energies,
+        "Positions": Positions,
+        "CellVectors": CellVectors,
+    }
+
+    
+    
+#Testing OUTCAR Parser
+if __name__ == "__main__":
+    OUTCARData = OutcarParser(WorkDir="../../Test/OUTCAR")
+    print(OUTCARData['Temperature'], 'K\n')
+    print('Times (fs):', OUTCARData['TimesFs'], '\n')
+    print('Positions:', OUTCARData['Positions'], '\n')
+    print('Cell Vectors:', OUTCARData['CellVectors'], '\n')
+    
+    
+    for key in OUTCARData['Energies']:
+        print(f'{key} =', OUTCARData['Energies'][key], '\n') 
 # %%

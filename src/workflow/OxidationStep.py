@@ -63,7 +63,7 @@ def UnFixElementFormatting(Position, PrevNames):
         Position.loc[Position['Element'] == NewName, 'Element'] = PrevName 
         
     return Position
-      
+
 
 def ExponentialSmoothing(f1, f2, alpha = 0.001):
     #Exponential smoothing function
