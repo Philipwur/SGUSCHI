@@ -115,7 +115,7 @@ Gasses = an.FindGases(Position,
                       MaximumComplexity = 3,
                       ReturnBondMatrix = False)
 
-New Workflow:
+New BondFinder Workflow:
 
 0. Checks to see if all elements in Position are covered in CovalentRadii
 -> if not raise error and specify element which needs to be added
@@ -137,6 +137,8 @@ Oxygen can only have 1 Oxygen bond at a time
 6. Sort All Elements in Molecule
 
 6. Return pd.DataFrame({'Molecule' : Molecules, 'Indices' : Indices})
+if Bondmatrix gets requested give that too. Maybe do some PP on it to make it 
+more useful. 
 '''
 
 def MinimumDistancePBCVectorised(Position, CellDim):
@@ -613,3 +615,5 @@ def PlaceO2Molecules(Positions: pd.DataFrame,
 
     return UpdatedPositions
 
+
+# %%
