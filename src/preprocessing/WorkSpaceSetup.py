@@ -83,7 +83,7 @@ def PrepareWorkingDirectory():
     
     WorkDir = Path.cwd()
 
-    #Keys required in OxParams
+    #K required in OxParams
     RequiredKeys = [
         'Temperatures',
         'NSims',
