@@ -10,7 +10,7 @@ from typing import Optional, Tuple
 
 
 
-
+# Graveyard for now
 
 def ConvertCartesianToDirect(Position, CellDim):
     
@@ -35,76 +35,6 @@ def ConvertCartesianToDirect(Position, CellDim):
     Position[['x','y','z']] = CartCoords
     
     return Position
-
-
-def MinimumDistancePBCVectorised(FracCoords, CellDim):
-
-    '''
-    Returns the shortest distance between all points in a periodic boundary condition
-    simulation according to the minimum image convention. CellDim must be converted to numpy format too.
-    
-    Args:
-        FracCoords (np.array): Fractional coordinates of atoms in numpy array form. 
-            Dimensions are 3xN. Elements column must have been removed.
-        pd.DataFrame: CellDim (pd.DataFrame): a 3x3 DataFrame defining cell dimensions in angstroms.
-        
-    Returns:
-        CartDistanceMatrix (np.array): NxN matrix of all distances between atoms in angstrom. 
-    '''
-
-    Displacement = FracCoords[:, np.newaxis, :] - FracCoords[np.newaxis, :, :]
-    Displacement -= np.round(Displacement)
-    CartDisplacement = Displacement @ CellDim
-    CartDistanceMatrix = np.linalg.norm(CartDisplacement, axis = 2)
-    
-    return CartDistanceMatrix
-
-
-def FindConnectedSubcomponents(AdjacencyMatrix):
-    
-    """
-    Identifies connected subcomponents in a molecular system given an adjacency matrix.
-
-    This function takes an (N, N) adjacency matrix and finds groups of atoms that are 
-    connected to each other via bonds. Each subcomponent is a tuple containing the 
-    indices of connected atoms. 
-    Uses Depth-First Search (explores each branch before backtracking).
-
-    Args:
-        AdjacencyMatrix (np.ndarray): A (N, N) binary matrix (0s and 1s) where:
-            - AdjacencyMatrix[i, j] = 1 indicates that atom i is bonded to atom j.
-
-    Returns:
-        list of tuple: A list where each tuple represents a connected molecular 
-        subcomponent. Each tuple contains atom indices in ascending order.
-    """
-
-    NumAtoms = AdjacencyMatrix.shape[0]
-    VisitedAtoms = set()
-    Subcomponents = []
-
-    for StartIndex in range(NumAtoms):
-        if StartIndex not in VisitedAtoms:
-            Queue = [StartIndex]
-            CurrentMolecule = []
-            
-            while Queue:
-                CurrentAtom = Queue.pop()
-                if CurrentAtom not in VisitedAtoms:
-                    VisitedAtoms.add(CurrentAtom)
-                    CurrentMolecule.append(CurrentAtom)
-                    Neighbors = np.where(AdjacencyMatrix[CurrentAtom])[0]
-                    for Neighbor in Neighbors:
-                        if Neighbor not in VisitedAtoms:
-                            Queue.append(Neighbor)
-
-            CurrentMolecule.sort()
-            Subcomponents.append(tuple(CurrentMolecule))
-            
-    return Subcomponents
-
-
-
 
 
 def CalculateGasVolume(Position, CellDim):
@@ -174,6 +104,110 @@ def CalculateOxidationRate(N, t, CellDim, PartialPressure,
         return (OxRate, LowerBound, UpperBound)
 
 
+
+
+'''
+Gasses = an.FindGases(Position, 
+                      CellDim, 
+                      CovalentRadii = CovalentRadii,
+                      AtomicRadiusTol = AtomicRadiusTol, 
+                      MinimumComplexity = 2,
+                      MaximumComplexity = 3,
+                      ReturnBondMatrix = False)
+
+New Workflow:
+
+0. Checks to see if all elements in Position are covered in CovalentRadii
+-> if not raise error and specify element which needs to be added
+
+1. Build a Cartesian Distance Matrix Accounting for PBC
+
+2. Run Bond Conditions over cartesian distance:
+Takes bond existence as radius of overlap of CovalentRadii * User defined tolerance
+-> the higher the tolerance the safer the algo is before removing a gas molecule
+
+3. Prune O Bonds
+Oxygen can only have 1 Oxygen bond at a time
+(Is this enough?, requires some more testing)
+
+4. Build Networks of Bonded Atoms
+
+5. Filter out Any network MinimumComplexity >= x >= Maximum Complexity
+
+6. Sort All Elements in Molecule
+
+6. Return pd.DataFrame({'Molecule' : Molecules, 'Indices' : Indices})
+'''
+
+def MinimumDistancePBCVectorised(Position, CellDim):
+
+    '''
+    Returns the shortest distance between all points in a periodic boundary condition
+    simulation according to the minimum image convention. CellDim must be converted to numpy format too.
+    
+    Args:
+        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
+            coordinates ('x', 'y', 'z').
+        pd.DataFrame: CellDim (pd.DataFrame): a 3x3 DataFrame defining cell dimensions in angstroms.
+        
+    Returns:
+        CartDistanceMatrix (np.array): NxN matrix of all distances between atoms in angstrom. 
+    '''
+    
+    FracCoords = Position[['x', 'y', 'z']].to_numpy()
+    Displacement = FracCoords[:, np.newaxis, :] - FracCoords[np.newaxis, :, :]
+    Displacement -= np.round(Displacement)
+    CartDisplacement = Displacement @ CellDim
+    CartDistanceMatrix = np.linalg.norm(CartDisplacement, axis = 2)
+    
+    return CartDistanceMatrix
+
+
+def FindConnectedSubcomponents(AdjacencyMatrix):
+    
+    """
+    Identifies connected subcomponents in a molecular system given an adjacency matrix.
+
+    This function takes an (N, N) adjacency matrix and finds groups of atoms that are 
+    connected to each other via bonds. Each subcomponent is a tuple containing the 
+    indices of connected atoms. 
+    Uses Depth-First Search (explores each branch before backtracking).
+
+    Args:
+        AdjacencyMatrix (np.ndarray): A (N, N) binary matrix (0s and 1s) where:
+            - AdjacencyMatrix[i, j] = 1 indicates that atom i is bonded to atom j.
+
+    Returns:
+        list of tuple: A list where each tuple represents a connected molecular 
+        subcomponent. Each tuple contains atom indices in ascending order.
+    """
+
+    NumAtoms = AdjacencyMatrix.shape[0]
+    VisitedAtoms = set()
+    Subcomponents = []
+
+    for StartIndex in range(NumAtoms):
+        if StartIndex not in VisitedAtoms:
+            Queue = [StartIndex]
+            CurrentMolecule = []
+            
+            while Queue:
+                CurrentAtom = Queue.pop()
+                if CurrentAtom not in VisitedAtoms:
+                    VisitedAtoms.add(CurrentAtom)
+                    CurrentMolecule.append(CurrentAtom)
+                    Neighbors = np.where(AdjacencyMatrix[CurrentAtom])[0]
+                    for Neighbor in Neighbors:
+                        if Neighbor not in VisitedAtoms:
+                            Queue.append(Neighbor)
+
+            CurrentMolecule.sort()
+            Subcomponents.append(tuple(CurrentMolecule))
+            
+    return Subcomponents
+
+
+
 def FindGases(Position, 
               CellDim, 
               Targets = [['C','O','O'], ['C','O'], ['O','O']],
@@ -191,11 +225,10 @@ def FindGases(Position,
     Count = pd.DataFrame({'Molecule' : [tuple(i) for i in Targets], 
                           'Count' : np.zeros(len(Targets))})    
 
-    FracCoords = Position[['x', 'y', 'z']].to_numpy()
     Elements = Position['Element'].to_numpy()
     CellDim = CellDim.to_numpy()
     
-    CartDistanceMatrix = MinimumDistancePBCVectorised(FracCoords, CellDim)
+    CartDistanceMatrix = MinimumDistancePBCVectorised(Position, CellDim)
 
     if Method == 'Adjacency':
         
@@ -212,7 +245,7 @@ def FindGases(Position,
         
         BondCutoffs.update((x, y * AtomicRadiusTol) for x, y in BondCutoffs.items())
         
-        N = len(FracCoords)
+        N = len(Position.index)
         BondMatrix = np.zeros((N, N))
         
         for i in range(N):
