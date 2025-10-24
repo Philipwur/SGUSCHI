@@ -136,7 +136,7 @@ def XYZTrajectoryParser(FilePath=None,
 need an xyz writer, with most relevatn data (time, energy, lattice vectors, positions)
 Probably need to think about atom tracking carefully. 
 
-#NOT WORKIGN BUT MAYBE DEFUNCT
+#NOT WORKIGN BUT MAYBE DEFUNCT (MAYBE NOT THOUGH)
 def VolSearchParser(WorkDir=None):
     if WorkDir is None:
         WorkDir = os.getcwd()
@@ -800,7 +800,6 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         "CellVectors": CellVectors,
     }
 
-    
     
 '''
 #Testing OUTCAR Parser
