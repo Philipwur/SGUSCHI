@@ -1,40 +1,15 @@
 #%%
 #Suite of functions to analyse VASP data parsed by VaspIO.py
-#Cannot have dependencies
-
-#Hard coded things that could be taken from database: 
-#1. Bond Length (FindGasses), Look at ionic radii overlap
-#2. Atomic Mass (AMU) (MaxwellBoltmannVelocities), just obtain from DataBase
+#Most upstream import, make sure this doesnt have SGUSCHI imports
 
 import pandas as pd
 import numpy as np
 import scipy.stats as stats
 import scipy.optimize as opt
-from typing import Optional
+from typing import Optional, Tuple
 
 
-def ConvertDirectToCartesian(Position, CellDim):
-    
-    '''
-    Converts all x, y, z coordinates in a position dataframe from their fractional
-    coordinates to cartesian coordinates. Useful for distance measurements.
-    
-    Args:
-        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
-            coordinates ('x', 'y', 'z').
-        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
-    
-    Returns:
-        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            coordinates ('x', 'y', 'z') in angstrom.
-    '''
-    
-    CellDim = CellDim.to_numpy()
-    FracCoords = Position[['x','y','z']].to_numpy()
-    CartCoords = FracCoords @ CellDim
-    Position[['x','y','z']] = CartCoords
-    
-    return Position
+
 
 
 def ConvertCartesianToDirect(Position, CellDim):
@@ -129,6 +104,76 @@ def FindConnectedSubcomponents(AdjacencyMatrix):
     return Subcomponents
 
 
+
+
+
+def CalculateGasVolume(Position, CellDim):
+    
+    '''
+    Calculates the volume of the oxidising gas by taking the distance between two 
+    outward Zr atoms.
+    '''
+
+    PositionZrX = Position['x'].loc[Position['Element'] == 'Zr']        
+    PositionZrX = PositionZrX.sort_values()
+    
+    XDistances = PositionZrX - PositionZrX.shift(1)
+    XDistances.iloc[0] =  1 - (PositionZrX.iloc[-1] + PositionZrX.iloc[0])
+    
+    GasWidth = XDistances.max() * np.linalg.norm(CellDim['x'])
+    SurfaceArea = np.linalg.norm(np.cross(CellDim['y'], CellDim['z']))
+    
+    GasVolume = GasWidth * SurfaceArea * 10 ** -30
+
+    return GasVolume
+
+
+def CalculateScaleThickness(Position, CellDim, AtomicRadiusTol):
+    BondMatrix = FindGases(Position, 
+                           CellDim, 
+                           AtomicRadiusTol = AtomicRadiusTol,
+                           ReturnBondMatrix = True)
+    return BondMatrix
+
+
+def CalculatePartialPressure(O2Molecules, Temp, GasVolume):
+    
+    R = 8.314462
+    Na = 6.022 * 10**23
+    atm = 101325
+
+    PartialPressure = (O2Molecules * R * Temp) / (GasVolume * atm * Na)
+
+    return PartialPressure
+
+
+def CalculateOxidationRate(N, t, CellDim, PartialPressure,
+                           PPConversion = 0.02, Alpha = 0.05):
+    
+    t = t * 1e-15
+    PureRate = N / t
+    
+    CellSurfaceArea = (2 * np.linalg.norm(np.cross(CellDim['y'], CellDim['z'])) 
+                       * 10 ** -20)
+    
+    OxidationRateConversion = PPConversion / CellSurfaceArea / PartialPressure
+    
+    OxRate = PureRate * OxidationRateConversion
+
+    if N == 0:
+        UpperBound = -np.log(Alpha) / t 
+        UpperBound *= OxidationRateConversion
+        return (OxRate, 0, UpperBound)
+    else:
+        ChiSquaredLowerBound = stats.chi2.ppf((Alpha / 2), (2 * N))
+        ChiSquaredUpperBound = stats.chi2.ppf((1 - (Alpha / 2)), (2 * (N + 1)))
+        LowerBound = ChiSquaredLowerBound / (2 * t)
+        UpperBound = ChiSquaredUpperBound / (2 * t)
+        LowerBound *= OxidationRateConversion
+        UpperBound *= OxidationRateConversion
+        return (OxRate, LowerBound, UpperBound)
+
+
 def FindGases(Position, 
               CellDim, 
               Targets = [['C','O','O'], ['C','O'], ['O','O']],
@@ -214,131 +259,204 @@ def FindGases(Position,
         return Count, GasIndices, BondCounts
 
 
-def CalculateGasVolume(Position, CellDim):
-    
+# --- New gen Code ---
+
+def ConvertDirectToCartesian(Position, CellDim): 
     '''
-    Calculates the volume of the oxidising gas by taking the distance between two 
-    outward Zr atoms.
+    Converts all x, y, z coordinates in a position dataframe from their fractional
+    coordinates to cartesian coordinates. Useful for distance measurements.
+    
+    Args:
+        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
+            coordinates ('x', 'y', 'z').
+        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
+    
+    Returns:
+        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
+            coordinates ('x', 'y', 'z') in angstrom.
     '''
-
-    PositionZrX = Position['x'].loc[Position['Element'] == 'Zr']        
-    PositionZrX = PositionZrX.sort_values()
     
-    XDistances = PositionZrX - PositionZrX.shift(1)
-    XDistances.iloc[0] =  1 - (PositionZrX.iloc[-1] + PositionZrX.iloc[0])
+    CellDim = CellDim.to_numpy()
+    FracCoords = Position[['x','y','z']].to_numpy()
+    CartCoords = FracCoords @ CellDim
+    Position[['x','y','z']] = CartCoords
     
-    GasWidth = XDistances.max() * np.linalg.norm(CellDim['x'])
-    SurfaceArea = np.linalg.norm(np.cross(CellDim['y'], CellDim['z']))
-    
-    GasVolume = GasWidth * SurfaceArea * 10 ** -30
-
-    return GasVolume
+    return Position
 
 
-def CalculateScaleThickness(Position, CellDim, AtomicRadiusTol):
-    BondMatrix = FindGases(Position, 
-                           CellDim, 
-                           AtomicRadiusTol = AtomicRadiusTol,
-                           ReturnBondMatrix = True)
-    return BondMatrix
+def CalculateGasFraction(Position, GasRatio):
+    """
+    Compute the gas fraction relative to beginning value from fractional x 
+    positions of Zr atoms and Initial GasRatio.
 
+    Parameters
+    ----------
+    Position : pandas.DataFrame
+        Must contain columns 'x' and 'Element'.
+    GasRatio : float
+        Ratio used to compute starting distance.
 
-def CalculatePartialPressure(O2Molecules, Temp, GasVolume):
-    
-    R = 8.314462
-    Na = 6.022 * 10**23
-    atm = 101325
+    Returns
+    -------
+    float
+        The gas fraction value. This is the fraction of gas in the simulation
+        relative to the starting value.
+    """
 
-    PartialPressure = (O2Molecules * R * Temp) / (GasVolume * atm * Na)
+    # Reference distance (based on GasRatio)
+    StartingDistance = 1.0 / (GasRatio + 1.0)
 
-    return PartialPressure
+    # Extract and sort x-coordinates for Zr atoms only
+    XCoordinates = (
+        Position.loc[Position['Element'] == 'Zr', 'x']
+        .sort_values()
+        .to_numpy()
+    )
 
+    # Compute neighbor distances (left differences)
+    Diffs = np.diff(XCoordinates)
 
-def CalculateOxidationRate(N, t, CellDim, PartialPressure,
-                           PPConversion = 0.02, Alpha = 0.05):
-    
-    t = t * 1e-15
-    PureRate = N / t
-    
-    CellSurfaceArea = (2 * np.linalg.norm(np.cross(CellDim['y'], CellDim['z'])) 
-                       * 10 ** -20)
-    
-    OxidationRateConversion = PPConversion / CellSurfaceArea / PartialPressure
-    
-    OxRate = PureRate * OxidationRateConversion
+    # Account for periodic boundary condition (wrap-around)
+    WrapDistance = 1.0 - XCoordinates[-1] + XCoordinates[0]
 
-    if N == 0:
-        UpperBound = -np.log(Alpha) / t 
-        UpperBound *= OxidationRateConversion
-        return (OxRate, 0, UpperBound)
-    else:
-        ChiSquaredLowerBound = stats.chi2.ppf((Alpha / 2), (2 * N))
-        ChiSquaredUpperBound = stats.chi2.ppf((1 - (Alpha / 2)), (2 * (N + 1)))
-        LowerBound = ChiSquaredLowerBound / (2 * t)
-        UpperBound = ChiSquaredUpperBound / (2 * t)
-        LowerBound *= OxidationRateConversion
-        UpperBound *= OxidationRateConversion
-        return (OxRate, LowerBound, UpperBound)
+    # Combine all distances, including wrap-around
+    AllDistances = np.append(Diffs, WrapDistance)
 
+    # Find largest distance between any two neighboring points
+    MaxDistance = np.max(AllDistances)
 
-#New code
+    # Compute gas fraction
+    GasFraction = MaxDistance / StartingDistance
+
+    return GasFraction
+
 
 def MaxwellBoltzmannVelocities(Elements, Temperature):
-    '''
-    Generate random Maxwell-Boltzmann velocities for atoms.
-    '''
-    
-    ElementMass = {'O': 15.99, 'C': 12.01, 'Zr': 91.22}
-    
+    """
+    Generate random Maxwell–Boltzmann distributed velocities for a list of atomic elements.
+
+    This function assigns each element in the input list a 3D velocity vector 
+    sampled from a normal distribution centered at zero, with a standard deviation 
+    determined by the Maxwell–Boltzmann distribution for a given temperature. 
+    The velocities are converted to Ångström per femtosecond (Å/fs).
+
+    Parameters
+    ----------
+    Elements : list of str
+        A list of element symbols (e.g., ['O', 'C', 'Zr', 'N']).
+    Temperature : float
+        The temperature in Kelvin at which to sample velocities.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        A list of 3D velocity vectors (each as a NumPy array) corresponding to 
+        each element in the input list, in units of Å/fs.
+
+    Raises
+    ------
+    ValueError
+        If any element in `Elements` is not found in the predefined mass dictionary.
+
+    Notes
+    -----
+    The following constants are used:
+        - Boltzmann constant (k_B) = 1.380649 × 10⁻²³ J/K
+        - Atomic mass unit (AMU_to_kg) = 1.66054 × 10⁻²⁷ kg
+        - Conversion factor from m/s to Å/fs (ms_to_Afs) = 1 × 10⁻⁵
+    """
+    ElementMass = {'O': 15.99, 'C': 12.01, 'Zr': 91.22, 'N': 14.01}
+
     k_B = 1.380649e-23
     AMU_to_kg = 1.66054e-27
     ms_to_Afs = 1e-5
 
     Velocities = []
-    
+
     for Element in Elements:
         if Element not in ElementMass:
             raise ValueError("Element {} not found in mass dictionary.".format(Element))
-        
-        Mass_kg = ElementMass[Element] * AMU_to_kg
-        Sigma = np.sqrt(k_B * Temperature / Mass_kg)
+
+        MassKg = ElementMass[Element] * AMU_to_kg
+        Sigma = np.sqrt(k_B * Temperature / MassKg)
         Velocity = np.random.normal(0, Sigma, 3)
         Velocity *= ms_to_Afs
         Velocities.append(Velocity)
-    
+
     return Velocities
 
 
 def FindOptimalCoords(Position: pd.DataFrame,
                       CellDim: pd.DataFrame,
-                      n: int = 1,
+                      N: int = 1,
                       ReturnRadius: bool = False,
                       Seed: Optional[int] = None,
                       MaxIterDE: int = 300,
-                      PopSizeDE: int = 15):
-    '''
-    Finds optimal fractional coordinates for the placement of n new atoms/molecules.
-    '''
+                      PopSizeDE: int = 15) -> Tuple[pd.DataFrame, Optional[float]]:
+    """
+    Find optimal fractional coordinates for placing new atoms or molecules
+    within a periodic simulation cell using global optimization.
 
-    def Wrap01(Array):
+    Uses differential evolution (global) for all N to avoid local minima. The objective
+    maximizes the minimal Cartesian distance to existing atoms (and between new sites
+    when N > 1), under periodic boundary conditions. Returned coordinates are fractional.
+
+    Parameters
+    ----------
+    Position : pandas.DataFrame
+        Existing atomic positions with columns ['x', 'y', 'z'] (fractional).
+    CellDim : pandas.DataFrame
+        Lattice vectors with columns ['x', 'y', 'z'] (Cartesian, rows are a,b,c).
+    N : int, optional
+        Number of new sites to place. Default is 1.
+    ReturnRadius : bool, optional
+        If True, also return the achieved minimum distance (radius). Default False.
+    Seed : int, optional
+        Random seed for reproducibility.
+    MaxIterDE : int, optional
+        Max iterations for differential evolution. Default 300.
+    PopSizeDE : int, optional
+        Population size multiplier for differential evolution. Default 15.
+
+    Returns
+    -------
+    pandas.DataFrame or Tuple[pandas.DataFrame, float]
+        DataFrame with columns ['x','y','z'] of optimal sites; optionally the radius.
+
+    Raises
+    ------
+    ValueError
+        If the required columns are missing.
+
+    Notes
+    -----
+    - Fractional coordinates are wrapped to [0, 1).
+    - DE provides global exploration to avoid local maxima traps.
+    """
+
+    # --- Helper functions ---
+    def Wrap01(Array: np.ndarray) -> np.ndarray:
         return Array - np.floor(Array)
 
-    def PBCDelta(FracA, FracB):
+    def PBCDelta(FracA: np.ndarray, FracB: np.ndarray) -> np.ndarray:
         Delta = FracA - FracB
         return Delta - np.round(Delta)
 
-    def CartDistFromFracDelta(DeltaFrac, CellDimArray):
+    def CartDistFromFracDelta(DeltaFrac: np.ndarray, CellDimArray: np.ndarray) -> np.ndarray:
         RCart = DeltaFrac @ CellDimArray
         return np.linalg.norm(RCart, axis=-1)
 
-    def MinDistanceToExisting(PointsFrac, FracExisting, CellDimArray):
+    def MinDistanceToExisting(PointsFrac: np.ndarray,
+                              FracExisting: np.ndarray,
+                              CellDimArray: np.ndarray) -> np.ndarray:
         if FracExisting.size == 0:
             return np.full(PointsFrac.shape[0], np.inf)
         DFrac = PBCDelta(PointsFrac[:, None, :], FracExisting[None, :, :])
         Dists = CartDistFromFracDelta(DFrac, CellDimArray)
         return Dists.min(axis=1)
 
-    def MinPairwiseAmongNew(PointsFrac, CellDimArray):
+    def MinPairwiseAmongNew(PointsFrac: np.ndarray,
+                            CellDimArray: np.ndarray) -> float:
         M = PointsFrac.shape[0]
         if M < 2:
             return np.inf
@@ -347,108 +465,105 @@ def FindOptimalCoords(Position: pd.DataFrame,
         np.fill_diagonal(Dists, np.inf)
         return Dists.min()
 
-    def Radius(PointsFrac, FracExisting, CellDimArray):
+    def Radius(PointsFrac: np.ndarray,
+               FracExisting: np.ndarray,
+               CellDimArray: np.ndarray) -> float:
         PointsFrac = Wrap01(PointsFrac)
         DistToExisting = MinDistanceToExisting(PointsFrac, FracExisting, CellDimArray)
         R1 = float(DistToExisting.min()) if DistToExisting.size else np.inf
         R2 = float(MinPairwiseAmongNew(PointsFrac, CellDimArray))
         return min(R1, R2)
 
-    if not all(c in Position.columns for c in ['x','y','z']):
+    # --- Input validation ---
+    if not all(C in Position.columns for C in ['x', 'y', 'z']):
         raise ValueError("Position must include columns ['x','y','z'].")
-    if not all(c in CellDim.columns for c in ['x','y','z']):
+    if not all(C in CellDim.columns for C in ['x', 'y', 'z']):
         raise ValueError("CellDim must include columns ['x','y','z'].")
 
-    FracExisting = Position[['x','y','z']].to_numpy(float)
-    CellDimArray = CellDim[['x','y','z']].to_numpy(float)
+    FracExisting = Position[['x', 'y', 'z']].to_numpy(float)
+    CellDimArray = CellDim[['x', 'y', 'z']].to_numpy(float)
 
-    def ObjectiveSingle(Point):
-        Point = Wrap01(np.asarray(Point, dtype=float))
-        return -Radius(Point[None, :], FracExisting, CellDimArray)
-
-    def ObjectiveMultiple(FlatPoints):
-        PointsFrac = Wrap01(np.asarray(FlatPoints, dtype=float).reshape(n, 3))
+    # --- Objective (works for any N) ---
+    def ObjectiveMultiple(FlatPoints: np.ndarray) -> float:
+        PointsFrac = Wrap01(np.asarray(FlatPoints, dtype=float).reshape(N, 3))
         return -Radius(PointsFrac, FracExisting, CellDimArray)
 
-    RNG = np.random.default_rng(Seed)
+    # --- Global optimization with DE for all N (including N == 1) ---
+    Bounds = [(0.0, 1.0)] * (3 * N)
+    
+    Result = opt.differential_evolution(
+        ObjectiveMultiple,
+        bounds=Bounds,
+        seed=Seed,
+        strategy='best1bin',
+        popsize=PopSizeDE,
+        maxiter=MaxIterDE,
+        mutation=(0.5, 1.0),
+        recombination=0.7,
+        polish=True,             
+        updating='deferred',
+        workers=1,
+        init='latinhypercube' #Best for identifying gas phase
+    )
 
-    if n == 1:
-        Seeds = [np.array([0.5, 0.5, 0.5])]
-        Seeds += list(RNG.random((7, 3)))
+    OptimalPoints = Wrap01(Result.x.reshape(N, 3))
+    OptimalSites = pd.DataFrame(OptimalPoints, columns=['x', 'y', 'z'])
+    RadiusValue = -float(Result.fun)
 
-        BestPoint = None
-        BestVal = np.inf
-        for Start in Seeds:
-            Result = opt.minimize(
-                ObjectiveSingle,
-                x0=Start,
-                method='Powell',
-                options={'maxiter': 200, 'xtol': 1e-4, 'ftol': 1e-4},
-            )
-            if Result.fun < BestVal:
-                BestVal = Result.fun
-                BestPoint = Wrap01(Result.x)
-
-        OptimalSites = pd.DataFrame([BestPoint], columns=['x','y','z'])
-        RadiusValue = -float(BestVal)
-
-    else:
-        Bounds = [(0.0, 1.0)] * (3 * n)
-        Result = opt.differential_evolution(
-            ObjectiveMultiple,
-            bounds=Bounds,
-            seed=Seed,
-            strategy='best1bin',
-            popsize=PopSizeDE,
-            maxiter=MaxIterDE,
-            mutation=(0.5, 1.0),
-            recombination=0.7,
-            polish=True,
-            updating='deferred',
-            workers=1,
-        )
-
-        OptimalPoints = Wrap01(Result.x.reshape(n, 3))
-        OptimalSites = pd.DataFrame(OptimalPoints, columns=['x','y','z'])
-        RadiusValue = -float(Result.fun)
-
-    if ReturnRadius:
-        return OptimalSites, RadiusValue
-    else:
-        return OptimalSites
+    return (OptimalSites, RadiusValue) if ReturnRadius else OptimalSites
 
 
-def PlaceO2Molecules(Position: pd.DataFrame,
+def PlaceO2Molecules(Positions: pd.DataFrame,
                      CellDim: pd.DataFrame,
                      NewSites: pd.DataFrame,
                      BondLength: float = 1.2):
     '''
     Places O2 molecules aligned along the x-axis at specified fractional coordinates.
+
+    Each molecule is centered at the given fractional coordinate from NewSites
+    and consists of two O atoms separated by BondLength (Å) along the x-axis.
+
+    Args:
+        Positions (pd.DataFrame): Existing atom positions with columns ['Element','x','y','z']
+            in fractional coordinates.
+        CellDim (pd.DataFrame): 3x3 DataFrame defining lattice vectors in Ångström.
+        NewSites (pd.DataFrame): Fractional coordinates ('x','y','z') where O2 molecules
+            should be centered.
+        BondLength (float): O–O bond length in Ångström.
+
+    Returns:
+        pd.DataFrame: Updated Positions DataFrame including added O atoms.
     '''
 
-    for df, name in [(Position, "Positions"), (CellDim, "CellDim"), (NewSites, "NewSites")]:
+    # Validate inputs
+    for df, name in [(Positions, "Positions"), (CellDim, "CellDim"), (NewSites, "NewSites")]:
         if not isinstance(df, pd.DataFrame):
-            raise TypeError("{} must be a pandas DataFrame.".format(name))
-    if not all(c in Position.columns for c in ['x','y','z']):
+            raise TypeError(f"{name} must be a pandas DataFrame.")
+    if not all(c in Positions.columns for c in ['x','y','z']):
         raise ValueError("Positions must contain ['x','y','z'] columns.")
     if not all(c in CellDim.columns for c in ['x','y','z']):
         raise ValueError("CellDim must contain ['x','y','z'] columns.")
     if not all(c in NewSites.columns for c in ['x','y','z']):
         raise ValueError("NewSites must contain ['x','y','z'] columns.")
 
+    # Convert to numpy arrays
     CellArray = CellDim[['x','y','z']].to_numpy(float)
     NewSitesArray = NewSites[['x','y','z']].to_numpy(float)
 
-    AVector = CellArray[0, :]
+    # Compute x-axis lattice vector and its norm (Å)
+    AVector = CellArray[0, :]   # first lattice vector (x-axis)
     ALength = np.linalg.norm(AVector)
     if ALength == 0:
         raise ValueError("Invalid CellDim: x lattice vector has zero length.")
 
-    HalfFracDisp = (BondLength / (2.0 * ALength))
+    # Bond displacement in fractional coordinates
+    HalfFracDisp = (BondLength / (2.0 * ALength))  # half bond in fractional units along x
 
+    # Prepare list for new O atoms
     NewAtoms = []
 
     for Site in NewSitesArray:
+        # Two atoms along ±x direction in fractional coordinates
         O1 = Site.copy()
         O2 = Site.copy()
         O1[0] = (O1[0] - HalfFracDisp) % 1.0
@@ -457,8 +572,11 @@ def PlaceO2Molecules(Position: pd.DataFrame,
         NewAtoms.append({'Element': 'O', 'x': O1[0], 'y': O1[1], 'z': O1[2]})
         NewAtoms.append({'Element': 'O', 'x': O2[0], 'y': O2[1], 'z': O2[2]})
 
-    # Convert to DataFrame and append to existing positions
-    NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element', 'x', 'y', 'z'])
-    UpdatedPositions = pd.concat([Position, NewAtomsDF], ignore_index=True)
+    # Convert to DataFrame
+    NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element','x','y','z'])
+
+    # Combine with existing positions
+    UpdatedPositions = pd.concat([Positions, NewAtomsDF], ignore_index=True)
 
     return UpdatedPositions
+
