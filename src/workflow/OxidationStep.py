@@ -143,7 +143,7 @@ def main(WorkDir = None, TestCase = False):
     
     #Read RateAnalysis
     try:
-        RateAnalysis = pd.read_csv(f'{WorkDir}/RateAnalysis.csv')
+        RateAnalysis = vio.ReadRateAnalysis(f'{WorkDir}/RateAnalysis.csv')
         FirstRun = False
     except:
         RateAnalysis = pd.DataFrame({'Time (fs)': 0,

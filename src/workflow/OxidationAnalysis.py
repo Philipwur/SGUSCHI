@@ -106,6 +106,193 @@ def CalculateOxidationRate(N, t, CellDim, PartialPressure,
 
 
 
+'''
+Gasses = an.FindGases(Position, 
+                      CellDim, 
+                      CovalentRadii = CovalentRadii,
+                      AtomicRadiusTol = AtomicRadiusTol, 
+                      MinimumComplexity = 2,
+                      MaximumComplexity = 3,
+                      ReturnBondMatrix = False)
+
+New BondFinder Workflow:
+
+0. Checks to see if all elements in Position are in in CovalentRadii dict
+-> if not raise error and specify element which needs to be added
+
+1. Build a Cartesian Distance Matrix Accounting for PBC
+
+2. Run Bond Conditions over cartesian distance:
+Takes bond existence as radius of overlap of CovalentRadii * User defined tolerance
+-> the higher the tolerance the safer the algo is before removing a gas molecule
+
+3. Prune O Bonds
+Oxygen can only have 1 Oxygen bond at a time
+(Is this enough?, requires some more testing)
+
+4. Build Networks of Bonded Atoms
+
+5. Filter out Any network MinimumComplexity >= x >= Maximum Complexity
+
+6. Sort All Elements in Molecule for identification steps downsteam
+
+6. Return pd.DataFrame({'Molecule' : Molecules, 'Indices' : Indices})
+if Bondmatrix gets requested give that too. Maybe do some PP on it to make it 
+more useful. 
+'''
+
+def MinimumDistancePBCVectorised(Position, CellDim):
+
+    '''
+    Returns the shortest distance between all points in a periodic boundary condition
+    simulation according to the minimum image convention. CellDim must be converted to numpy format too.
+    
+    Args:
+        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
+            coordinates ('x', 'y', 'z').
+        pd.DataFrame: CellDim (pd.DataFrame): a 3x3 DataFrame defining cell dimensions in angstroms.
+        
+    Returns:
+        CartDistanceMatrix (np.array): NxN matrix of all distances between atoms in angstrom. 
+    '''
+    
+    FracCoords = Position[['x', 'y', 'z']].to_numpy()
+    Displacement = FracCoords[:, np.newaxis, :] - FracCoords[np.newaxis, :, :]
+    Displacement -= np.round(Displacement)
+    CartDisplacement = Displacement @ CellDim
+    CartDistanceMatrix = np.linalg.norm(CartDisplacement, axis = 2)
+    
+    return CartDistanceMatrix
+
+
+def FindConnectedSubcomponents(AdjacencyMatrix):
+    
+    """
+    Identifies connected subcomponents in a molecular system given an adjacency matrix.
+
+    This function takes an (N, N) adjacency matrix and finds groups of atoms that are 
+    connected to each other via bonds. Each subcomponent is a tuple containing the 
+    indices of connected atoms. 
+    Uses Depth-First Search (explores each branch before backtracking).
+
+    Args:
+        AdjacencyMatrix (np.ndarray): A (N, N) binary matrix (0s and 1s) where:
+            - AdjacencyMatrix[i, j] = 1 indicates that atom i is bonded to atom j.
+
+    Returns:
+        list of tuple: A list where each tuple represents a connected molecular 
+        subcomponent. Each tuple contains atom indices in ascending order.
+    """
+
+    NumAtoms = AdjacencyMatrix.shape[0]
+    VisitedAtoms = set()
+    Subcomponents = []
+
+    for StartIndex in range(NumAtoms):
+        if StartIndex not in VisitedAtoms:
+            Queue = [StartIndex]
+            CurrentMolecule = []
+            
+            while Queue:
+                CurrentAtom = Queue.pop()
+                if CurrentAtom not in VisitedAtoms:
+                    VisitedAtoms.add(CurrentAtom)
+                    CurrentMolecule.append(CurrentAtom)
+                    Neighbors = np.where(AdjacencyMatrix[CurrentAtom])[0]
+                    for Neighbor in Neighbors:
+                        if Neighbor not in VisitedAtoms:
+                            Queue.append(Neighbor)
+
+            CurrentMolecule.sort()
+            Subcomponents.append(tuple(CurrentMolecule))
+            
+    return Subcomponents
+
+
+
+def FindGases(Position, 
+              CellDim, 
+              Targets = [['C','O','O'], ['C','O'], ['O','O']],
+              Method = 'Adjacency',
+              AtomicRadiusTol = 1.3,
+              ReturnBondMatrix = False):
+
+    """
+    Identifies gas-phase molecules using a fixed-distance nearest neighbor algorithm.
+    """
+
+    Targets = [sorted(i) for i in Targets]
+    
+    GasIndices = pd.DataFrame(columns = ['Molecule', 'Indices'])
+    Count = pd.DataFrame({'Molecule' : [tuple(i) for i in Targets], 
+                          'Count' : np.zeros(len(Targets))})    
+
+    Elements = Position['Element'].to_numpy()
+    CellDim = CellDim.to_numpy()
+    
+    CartDistanceMatrix = MinimumDistancePBCVectorised(Position, CellDim)
+
+    if Method == 'Adjacency':
+        
+        BondCutoffs = {
+            ('O', 'O'): 1.5,
+            ('C', 'O'): 1.7,
+            ('O', 'C'): 1.7,
+            ('C', 'C'): 1.7,
+            ('Zr', 'O'): 1.8,
+            ('O', 'Zr'): 1.8,
+            ('Zr', 'Zr'): 1.9,
+            ('Zr', 'C'): 1.9,
+            }
+        
+        BondCutoffs.update((x, y * AtomicRadiusTol) for x, y in BondCutoffs.items())
+        
+        N = len(Position.index)
+        BondMatrix = np.zeros((N, N))
+        
+        for i in range(N):
+            for j in range(i + 1, N):
+                pair = (Elements[i], Elements[j])
+                if pair in BondCutoffs:
+                    cutoff = BondCutoffs[pair]
+                    if CartDistanceMatrix[i, j] < cutoff:
+                        BondMatrix[i, j] = 1
+                        BondMatrix[j, i] = 1
+        
+        OIndices = [idx for idx, elem in enumerate(Elements) if elem == 'O']
+        
+        for i in OIndices:
+            ONeighbors = [j for j in OIndices
+                          if j != i and BondMatrix[i, j] == 1]
+            if len(ONeighbors) > 1:
+                OClosest = min(ONeighbors, key=lambda j: CartDistanceMatrix[i, j])
+                for j in ONeighbors:
+                    if j != OClosest:
+                        BondMatrix[i, j] = 0
+                        BondMatrix[j, i] = 0 
+        
+        if ReturnBondMatrix:
+            return BondMatrix
+        
+        MoleculeIndices = FindConnectedSubcomponents(BondMatrix)
+        
+        for i in MoleculeIndices:
+            Molecule = sorted([Elements[j] for j in i])
+            if Molecule in Targets:
+                GasIndices.loc[len(GasIndices.index)] = [tuple(Molecule), i]
+                Count.loc[Count['Molecule'] == tuple(Molecule), 'Count'] += 1
+            
+        BondPairs = []
+        for i in range(N):
+            for j in range(i + 1, N):
+                if BondMatrix[i, j] == 1:
+                    BondPairs.append(tuple(sorted([Elements[i], Elements[j]])))
+
+        BondCounts = pd.DataFrame(pd.Series(BondPairs).value_counts()).reset_index()
+        BondCounts.columns = ['Element Pair', 'Bond Count']
+        
+        return Count, GasIndices, BondCounts
+
 
 # --- New gen Code ---
 
@@ -364,49 +551,52 @@ def ConvertDirectToCartesian(Position, CellDim):
     return Position
 
 
-def CalculateGasFraction(Position, GasRatio):
+def CalculateGasFraction(Position: pd.DataFrame, GasRatio: float, 
+                         ClipToOne: bool = True) -> float:
     """
-    Compute the gas fraction relative to beginning value from fractional x 
-    positions of Zr atoms and Initial GasRatio.
+    Compute the gas fraction (current void size relative to starting void size)
+    along the fractional x-direction using Zr atom positions.
 
-    Parameters
-    ----------
-    Position : pandas.DataFrame
-        Must contain columns 'x' and 'Element'.
-    GasRatio : float
-        Ratio used to compute starting distance.
+    GasRatio is defined as L_gas / L_solid along x, so the starting void length
+    is L_gas0 = GasRatio / (1 + GasRatio). For GasRatio=2, L_gas0 = 2/3 ≈ 0.6667.
 
-    Returns
-    -------
-    float
-        The gas fraction value. This is the fraction of gas in the simulation
-        relative to the starting value.
+    The current void length is estimated as the largest gap between neighboring
+    Zr fractional x-coordinates under PBC. The returned fraction is:
+        GasFraction = CurrentVoidLength / StartingVoidLength
+    which begins at ~1.0 and decreases (e.g., 0.8) as the gas region shrinks.
+
+    Args:
+        Position (pd.DataFrame): Must contain columns 'Element' and fractional 'x'.
+        GasRatio (float): Positive ratio L_gas / L_solid at the start.
+        ClipToOne (bool): If True, cap the fraction at 1.0 (never exceed starting).
+
+    Returns:
+        float: Gas fraction relative to the starting amount of gas.
+
+    Raises:
+        ValueError: If GasRatio <= 0.
     """
 
-    # Reference distance (based on GasRatio)
-    StartingDistance = 1.0 / (GasRatio + 1.0)
+    # Starting void length (fraction of the unit cell along x)
+    StartingVoidLength = float(GasRatio / (GasRatio + 1.0))
 
-    # Extract and sort x-coordinates for Zr atoms only
-    XCoordinates = (
-        Position.loc[Position['Element'] == 'Zr', 'x']
-        .sort_values()
-        .to_numpy()
-    )
+    # Extract Zr x-fractional coordinates
+    XCoordinates = Position.loc[Position['Element'] == 'Zr', 'x'].to_numpy()
 
-    # Compute neighbor distances (left differences)
+    # Sort and compute nearest-neighbor gaps with PBC wrap-around
+    XCoordinates.sort()
     Diffs = np.diff(XCoordinates)
-
-    # Account for periodic boundary condition (wrap-around)
     WrapDistance = 1.0 - XCoordinates[-1] + XCoordinates[0]
 
-    # Combine all distances, including wrap-around
-    AllDistances = np.append(Diffs, WrapDistance)
+    if Diffs.size:
+        MaxDistance = float(max(WrapDistance, np.max(Diffs)))
+    else:
+        MaxDistance = float(WrapDistance)
 
-    # Find largest distance between any two neighboring points
-    MaxDistance = np.max(AllDistances)
+    GasFraction = MaxDistance / StartingVoidLength
 
-    # Compute gas fraction
-    GasFraction = MaxDistance / StartingDistance
+    if ClipToOne:
+        GasFraction = min(GasFraction, 1.0)
 
     return GasFraction
 
@@ -663,3 +853,182 @@ def PlaceO2Molecules(Positions: pd.DataFrame,
 
 # %%
 
+from typing import List, Dict, Tuple
+from pathlib import Path
+import pandas as pd
+import numpy as np
+
+import VaspIO as vio   # per your request
+             # assumes FindGases, CalculateGasFraction are available
+
+# -------------------- Configuration ------------------------------------------
+
+BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch")
+
+# Extend to cover all elements present
+CovalentRadii: Dict[str, float] = {
+    "H": 0.31,
+    "C": 0.76,
+    "O": 0.66,
+    "Zr": 1.45,
+    # ...
+}
+
+AtomicRadiusTol = 1.30
+MinimumComplexity = 2
+MaximumComplexity = 3
+
+# Free-gas fraction parameters
+GasRatio = 2.0  # tune to your convention for an.CalculateGasFraction
+
+# Timing assumptions (only for RateAnalysis “Time (fs)” in this harness)
+FramesAreEveryNSteps = 80
+TimeStepFs = 1.0
+TimePerFrameFs = FramesAreEveryNSteps * TimeStepFs
+
+# Smoothing & O2 added (constant per your request)
+OxygenSmoothing = 0.001
+O2AddedConstant = 10  # keep O2 Added fixed at initial oxygen number (10)
+
+# -----------------------------------------------------------------------------
+
+def ExponentialSmoothing(CurrentValue: float, PreviousSmoothed: float, Alpha: float) -> float:
+    return Alpha * CurrentValue + (1.0 - Alpha) * PreviousSmoothed
+
+
+def RunGasDetectionBatch() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """
+    Loop folders 1..200 under BaseDirPath, read POSCARs via vio.ReadPoscar,
+    fix element formatting, run FindGases, and write:
+      - gas_results_per_frame.csv
+      - gas_counts_per_frame.csv
+      - RateAnalysis.csv (with fixed 'O2 Added' = 10 and 'Gas Removed' = non-O2 molecules)
+    """
+    AllRows: List[Dict] = []
+
+    # Initialize RateAnalysis with requested columns
+    RateAnalysisDf = pd.DataFrame([{
+        "Time (fs)": 0.0,
+        "O2 Count": 10,
+        "Smoothed O2 Count": 10,
+        "O2 Added": O2AddedConstant,  # fixed at 10 for all rows
+        "Gas Removed": "[]",
+        "Free Gas Fraction": 1.0,
+        'Molecules' : []
+    }])
+
+    RunningTimeFs = 0.0
+    PreviousSmoothed = 10
+
+    for FrameIndex in range(1, 201):
+        WorkDirPath = BaseDirPath / str(FrameIndex)
+        try:
+            Position, CellDim = vio.ReadPoscar(WorkDir=WorkDirPath)
+            Position = vio.FixElementFormatting(Position)
+        except FileNotFoundError:
+            print(f"[WARN] Skipping frame {FrameIndex}: POSCAR/CONTCAR not found in {WorkDirPath}")
+            continue
+        except Exception as Err:
+            print(f"[WARN] Skipping frame {FrameIndex}: {Err}")
+            continue
+
+        ResultDf = FindGases(
+            Position=Position,
+            CellDim=CellDim,
+            CovalentRadii=CovalentRadii,
+            AtomicRadiusTol=AtomicRadiusTol,
+            MinimumComplexity=MinimumComplexity,
+            MaximumComplexity=MaximumComplexity,
+            ReturnBondMatrix=False
+        )
+        print(ResultDf)
+        # Collect per-frame molecule rows (keep tuple formatting)
+        if not ResultDf.empty:
+            for Molecule, Indices in zip(ResultDf["Molecule"], ResultDf["Indices"]):
+                AllRows.append({
+                    "Frame": FrameIndex,
+                    "Molecule": tuple(Molecule),
+                    "Indices": tuple(Indices),
+                })
+        else:
+            AllRows.append({
+                "Frame": FrameIndex,
+                "Molecule": tuple(),
+                "Indices": tuple(),
+            })
+
+        RunningTimeFs += TimePerFrameFs
+
+        # Free gas fraction
+        FreeGasFraction = float(CalculateGasFraction(Position, GasRatio))
+
+        # O2 count this frame
+        O2Count = int((ResultDf["Molecule"] == ('O', 'O')).sum()) if not ResultDf.empty else 0
+
+        # Smoothed O2
+        SmoothedO2Count = float(ExponentialSmoothing(O2Count, PreviousSmoothed, OxygenSmoothing))
+
+        # Molecules column for structure testing
+        MoleculesList = [] if ResultDf.empty else [tuple(m) for m in ResultDf["Molecule"].tolist()]
+        MoleculesStr = repr(MoleculesList)
+        
+        # Gas Removed: add any molecule which is NOT O2 (include duplicates if multiple present)
+        if ResultDf.empty:
+            GasRemovedStr = "[]"
+        else:
+            NonO2 = [tuple(m) for m in ResultDf["Molecule"].tolist() if tuple(m) != ('O', 'O')]
+            GasRemovedStr = repr(NonO2)
+
+        NewRow = {
+            "Time (fs)": RunningTimeFs,
+            "O2 Count": O2Count,
+            "Smoothed O2 Count": SmoothedO2Count,
+            "O2 Added": O2AddedConstant,          # remains 10
+            "Gas Removed": GasRemovedStr,         # non-O2 molecules for this frame
+            "Free Gas Fraction": FreeGasFraction,
+            "Molecules": MoleculesStr,   
+        }
+        RateAnalysisDf = pd.concat([RateAnalysisDf, pd.DataFrame([NewRow])], ignore_index=True)
+
+        PreviousSmoothed = SmoothedO2Count
+
+    # Build per-frame molecule counts (ignores empty markers)
+    ResultsPerFrame = pd.DataFrame(AllRows)
+    NonEmpty = ResultsPerFrame[ResultsPerFrame["Molecule"].apply(len) > 0]
+    if NonEmpty.empty:
+        CountsPerFrame = pd.DataFrame(columns=["Frame", "Molecule", "Count"])
+    else:
+        CountsPerFrame = (
+            NonEmpty
+            .groupby(["Frame", "Molecule"])
+            .size()
+            .reset_index(name="Count")
+            .sort_values(["Frame", "Count"], ascending=[True, False])
+            .reset_index(drop=True)
+        )
+
+    # Write CSVs
+    ResultsCsvPath = BaseDirPath / "gas_results_per_frame.csv"
+    CountsCsvPath = BaseDirPath / "gas_counts_per_frame.csv"
+    RateCsvPath = BaseDirPath / "RateAnalysis.csv"
+
+    ResultsPerFrame.to_csv(ResultsCsvPath, index=False)
+    CountsPerFrame.to_csv(CountsCsvPath, index=False)
+    RateAnalysisDf.to_csv(RateCsvPath, index=False)
+
+    print(f"Saved: {ResultsCsvPath}")
+    print(f"Saved: {CountsCsvPath}")
+    print(f"Saved: {RateCsvPath}")
+
+    return ResultsPerFrame, CountsPerFrame, RateAnalysisDf
+
+
+if __name__ == "__main__":
+    ResultsPerFrame, CountsPerFrame, RateAnalysisDf = RunGasDetectionBatch()
+    print("\n=== RateAnalysis preview ===")
+    print(RateAnalysisDf.head(8))
+# %%
+BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch\RateAnalysis.csv")
+df = vio.ReadRateAnalysis(BaseDirPath)
+print(df['Molecules'][1][0][0])
+# %%
