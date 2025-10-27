@@ -183,7 +183,8 @@ def main(WorkDir = None, TestCase = False):
                           CovalentRadii = CovalentRadii,
                           AtomicRadiusTol = AtomicRadiusTol, 
                           MinimumComplexity = 2,
-                          MaximumComplexity = 3)
+                          MaximumComplexity = 3,
+                          ReturnBondMatrix = False)
     
     Position, Velocity = an.RemoveNonO2Gasses(Position,
                                               Velocity,
