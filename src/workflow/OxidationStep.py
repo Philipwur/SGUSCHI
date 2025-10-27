@@ -192,7 +192,10 @@ def main(WorkDir = None, TestCase = False):
                                               Gasses)
     
     O2Tol = O2Tol * GasFraction
+    
+    #Check that this works
     O2Count = len(Gasses[Gasses['Molecule'] == ('O', 'O')].index)
+    
     SmoothedO2Count = ExponentialSmoothing(O2Count, 
                                            RateAnalysis['Smoothed O2 Count'].iloc[-1],
                                            alpha = OxygenSmoothing)
