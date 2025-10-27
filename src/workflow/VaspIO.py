@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Any, List, Dict, Union, Tuple
 
 #import sys
-
+import ast
 #sys.path.append(str(Path(__file__).resolve().parents[1]))
 #from workflow import OxidationAnalysis as an
 
@@ -939,6 +939,42 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
     }
     
 
+def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
+    """
+    Read RateAnalysis.csv and convert the 'Gas Removed' column (and 'Molecules' if present)
+    from their repr strings back to Python objects (list of tuples), e.g.:
+        "[('O', 'O'), ('C', 'O', 'O')]" -> [('O', 'O'), ('C', 'O', 'O')]
+
+    Args:
+        FilePath: Path to the RateAnalysis.csv file.
+
+    Returns:
+        pandas.DataFrame with parsed object columns.
+    """
+    
+    FilePath = Path(FilePath)
+    # Ensure the path points to RateAnalysis.csv (append/replace if needed)
+    if FilePath.name.lower() != "rateanalysis.csv":
+        FilePath = FilePath.with_name("RateAnalysis.csv") if FilePath.suffix else (FilePath / "RateAnalysis.csv")
+
+    try:    
+        df = pd.read_csv(FilePath)
+    except:
+        raise FileExistsError(f"RateAnalysis Does Not Exist at {FilePath}")
+    
+    if 'Gas Removed' in df.columns:
+        df['Gas Removed'] = [
+            ast.literal_eval(S) if isinstance(S, str) and S.strip() else []
+            for S in df['Gas Removed']
+        ]
+
+    if 'Molecules' in df.columns:
+        df['Molecules'] = [
+            ast.literal_eval(S) if isinstance(S, str) and S.strip() else []
+            for S in df['Molecules']
+        ]
+
+    return df
 '''
 #Testing OUTCAR Parser
 if __name__ == "__main__":
