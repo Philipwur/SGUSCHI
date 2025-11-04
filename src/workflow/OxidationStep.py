@@ -86,6 +86,21 @@ def InsertNewVelocities(Velocities: pd.DataFrame,
     return Updated
 
 
+def CreateGassesRemovedStr(Gasses) -> str:
+    """
+    Return a repr string of all non-O2 molecules found in the frame, e.g.:
+    "[('C', 'O', 'O'), ('H', 'O')]"
+    """
+    if isinstance(Gasses, tuple):
+        Gasses = Gasses[0]
+    if Gasses is None or Gasses.empty:
+        return "[]"
+
+    NonO2 = [tuple(M) for M in Gasses["Molecule"].tolist() if tuple(M) != ("O", "O")]
+    
+    return repr(NonO2)
+
+
 def main(WorkDir = None, TestCase = False):
     
     """
@@ -137,23 +152,22 @@ def main(WorkDir = None, TestCase = False):
     
     #Collect Radii for Bond Algo
     if os.path.exists(os.path.join(RootDir, 'CovalentRadii')):
-        CovalentRadii = vio.ReadKeyValueFile(os.path.join(WorkDir, 'CovalentRadii'))
+        CovalentRadii = vio.ReadKeyValueFile(os.path.join(RootDir, 'CovalentRadii'))
     else:
         raise FileNotFoundError(f'CovalentRadii file not found in {RootDir}.')
     
     #Read RateAnalysis
     try:
         RateAnalysis = vio.ReadRateAnalysis(f'{WorkDir}/RateAnalysis.csv')
-        FirstRun = False
+
     except:
-        RateAnalysis = pd.DataFrame({'Time (fs)': 0,
+        RateAnalysis = pd.DataFrame([{'Time (fs)': 0,
                                      'O2 Count': InitO2Count,
                                      'Smoothed O2 Count': InitO2Count,
                                      'O2 Added': InitO2Count,
                                      'Gas Removed': '[]',
                                      'Free Gas Fraction': 1
-                                     })
-        FirstRun = True
+                                     }])
         
     #------------------------- Gather Run Information -------------------------
 
@@ -188,7 +202,6 @@ def main(WorkDir = None, TestCase = False):
     
     Position, Velocity = an.RemoveNonO2Gasses(Position,
                                               Velocity,
-                                              CellDim,
                                               Gasses)
     
     O2Tol = O2Tol * GasFraction
@@ -227,12 +240,14 @@ def main(WorkDir = None, TestCase = False):
         
     #----------------------------- File Management ----------------------------
     
+    GasRemovedStr = CreateGassesRemovedStr(Gasses)
+    
     NewRateRow = [
         SimTime + RateAnalysis['Time (fs)'].iloc[-1],
         O2Count,
         SmoothedO2Count,
         O2Added + RateAnalysis['O2 Added'].iloc[-1],
-        # Line for Gas removed (first gotta update algo)
+        GasRemovedStr,
         GasFraction
     ]
     
@@ -247,9 +262,9 @@ def main(WorkDir = None, TestCase = False):
         # Update RateAnalysis
         RateAnalysis = pd.concat([RateAnalysis, NewRateRow],
                                 ignore_index = True)
-        RateAnalysis.to_csv(f'{WorkDir}/RateAnalysis.csv')
+        RateAnalysis.to_csv(f'{WorkDir}/RateAnalysis.csv', index = False)
         PathToResults = os.path.join(RootDir, 'xyz_files', f'RateAnalysis_{TrajectoryName}.csv')
-        RateAnalysis.to_csv(PathToResults)
+        RateAnalysis.to_csv(PathToResults, index = False)
         
         # Update POSCAR
         vio.WritePoscar(WorkDir, Position, CellDim, Velocity)
@@ -260,12 +275,7 @@ def main(WorkDir = None, TestCase = False):
     # Prevents any creation of new files
     if TestCase:
         
-        print(NewRateRow)
-        print(Gasses)
-        
-        print('yay')
-        
-        
+        print('Not Implemented yet')
     #First update RateAnalysis
     
     # Steps
