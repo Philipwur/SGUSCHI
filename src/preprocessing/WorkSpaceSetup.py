@@ -15,7 +15,7 @@ The following files must exist before running this script:
                      - AtomicRadiusTol
                      - TargetPP
                      - PPSmoothing
-                     - InitO2
+                     - InitO2Count
                      - GasRatio
                      - Temperatures
                      - NSims
@@ -88,7 +88,7 @@ def PrepareWorkingDirectory():
         'Temperatures',
         'NSims',
         'GasRatio',
-        'InitO2'
+        'InitO2Count'
     ]
     
     # 1) Read and validate OxParams and input files
