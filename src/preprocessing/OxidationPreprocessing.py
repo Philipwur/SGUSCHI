@@ -122,7 +122,7 @@ def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
     #First expand the x-dimension by GasRatio and scale fractional positions
      
     Position, CellDim = AddVacuum(Position, CellDim, GasRatio = GasRatio)
-    NewSites = an.FindOptimalCoords(Position, CellDim, n = InitO2)
+    NewSites = an.FindOptimalCoords(Position, CellDim, N = InitO2)
     Position = an.PlaceO2Molecules(Position = Position,
                                   CellDim = CellDim,
                                   NewSites = NewSites)
