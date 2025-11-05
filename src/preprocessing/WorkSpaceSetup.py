@@ -191,7 +191,7 @@ def PrepareWorkingDirectory():
             NewPosition, NewCellDim = opp.PreparePOSCAR(
                 Position, CellDim, GasRatio=GasRatio, InitO2=InitO2
             )
-            vio.WritePOSCAR(str(SimDir), NewPosition, NewCellDim)
+            vio.WritePoscar(str(SimDir), NewPosition, NewCellDim)
             print("Prepared POSCAR for {}".format(FolderName))
 
             # 8) Copy files into Dir_VolSearch
