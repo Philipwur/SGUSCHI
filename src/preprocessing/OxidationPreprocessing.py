@@ -123,7 +123,7 @@ def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
      
     Position, CellDim = AddVacuum(Position, CellDim, GasRatio = GasRatio)
     NewSites = an.FindOptimalCoords(Position, CellDim, N = InitO2)
-    Position = an.PlaceO2Molecules(Position = Position,
+    Position = an.PlaceO2Molecules(Positions = Position,
                                   CellDim = CellDim,
                                   NewSites = NewSites)
     
