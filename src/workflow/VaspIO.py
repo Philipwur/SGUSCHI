@@ -145,7 +145,7 @@ def ReadKeyValueFile(FilePath: Path,
         FileNotFoundError: If the file does not exist.
         ValueError: If a required key is missing.
     """
-
+    
     if not FilePath.exists():
         raise FileNotFoundError("Configuration file not found at: {}".format(FilePath))
 

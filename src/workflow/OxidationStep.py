@@ -124,41 +124,51 @@ def main(WorkDir = None, TestCase = False):
     if WorkDir == None:
         WorkDir = os.getcwd()
     
+    WorkDir = Path(WorkDir).resolve()
     
     #------------------------- Gather Hyperparameters -------------------------
     
     
     #Location of Radii, Oxparams, Results/, xyz_files/ etc
-    RootDir = Path(WorkDir).resolve().parents[1]
-    TrajectoryName = Path(WorkDir).resolve().parent.name
+    RootDir = WorkDir.parents[1]
+    TrajectoryName = WorkDir.parent.name
     
     #Collect hyperparameters
-    if os.path.exists(os.path.join(RootDir, 'OxParams')):
+    
+    OxParamsPath = RootDir / 'OxParams'
+    
+    if not OxParamsPath.exists():
+        raise FileNotFoundError(f'OxParams file not found in {OxParamsPath}.')
+    
+    OxParams = vio.ReadKeyValueFile(OxParamsPath, 
+                                    RequiredKeys = ['AtomicRadiusTol', 
+                                                    'O2Tol',
+                                                    'OSmoothing',
+                                                    'GasRatio',
+                                                    'InitO2Count'])
+    
+    AtomicRadiusTol = float(OxParams['AtomicRadiusTol'])
+    O2Tol = float(OxParams['O2Tol'])
+    OxygenSmoothing = float(OxParams['OSmoothing'])
+    GasRatio = float(OxParams['GasRatio'])
+    InitO2Count = int(OxParams['InitO2Count'])
         
-        OxParams = vio.ReadKeyValueFile(f'{RootDir}/OxParams', 
-                                        RequiredKeys = ['AtomicRadiusTol', 
-                                                        'O2Tol',
-                                                        'OSmoothing',
-                                                        'GasRatio',
-                                                        'InitO2Count'])
-        
-        AtomicRadiusTol = OxParams['AtomicRadiusTol']
-        O2Tol = OxParams['O2Tol']
-        OxygenSmoothing = OxParams['OSmoothing']
-        GasRatio = OxParams['GasRatio']
-        InitO2Count = OxParams['InitO2Count']
-    else:
-        raise FileNotFoundError(f'OxParams file not found in {RootDir}.')
     
     #Collect Radii for Bond Algo
-    if os.path.exists(os.path.join(RootDir, 'CovalentRadii')):
-        CovalentRadii = vio.ReadKeyValueFile(os.path.join(RootDir, 'CovalentRadii'))
-    else:
+    
+    CovalentRadiiPath = RootDir / 'CovalentRadii'
+    
+    if not CovalentRadiiPath.exists():
         raise FileNotFoundError(f'CovalentRadii file not found in {RootDir}.')
     
+    CovalentRadii = vio.ReadKeyValueFile(CovalentRadiiPath)
+    CovalentRadii = {k: float(v) for k, v in CovalentRadii.items()}
+    
     #Read RateAnalysis
+    RateAnalysisPath = WorkDir / 'RateAnalysis.csv'
+    
     try:
-        RateAnalysis = vio.ReadRateAnalysis(f'{WorkDir}/RateAnalysis.csv')
+        RateAnalysis = vio.ReadRateAnalysis(RateAnalysisPath)
 
     except:
         RateAnalysis = pd.DataFrame([{'Time (fs)': 0,
@@ -190,8 +200,8 @@ def main(WorkDir = None, TestCase = False):
     GasFraction = an.CalculateGasFraction(Position, GasRatio)
     
     
-    # Gasses should return the molecule structure (sorted in some way) and 
-    # their indices
+    #Gasses should return the molecule structure (sorted in some way) and 
+    #their indices
     Gasses = an.FindGases(Position, 
                           CellDim, 
                           CovalentRadii = CovalentRadii,
@@ -200,6 +210,11 @@ def main(WorkDir = None, TestCase = False):
                           MaximumComplexity = 3,
                           ReturnBondMatrix = False)
     
+    #Ensure the Molecule column is tuple-typed so equality checks behave
+    if (Gasses is not None) and (not Gasses.empty) and ("Molecule" in Gasses.columns):
+        Gasses = Gasses.copy()
+        Gasses["Molecule"] = Gasses["Molecule"].apply(lambda M: tuple(M) if not isinstance(M, tuple) else M)
+
     Position, Velocity = an.RemoveNonO2Gasses(Position,
                                               Velocity,
                                               Gasses)
@@ -256,14 +271,19 @@ def main(WorkDir = None, TestCase = False):
     if not TestCase:
         
         # Update xyz
-        PathToXYZ = os.path.join(RootDir, 'xyz_files', f'{TrajectoryName}.xyz')
-        vio.WriteXYZ(OutcarData, FilePath = PathToXYZ)
+        #PathToXYZ = os.path.join(RootDir, 'xyz_files', f'{TrajectoryName}.xyz')
+        
+        XYZPath = RootDir / 'xyz_files' / f'{TrajectoryName}.xyz'
+
+        vio.WriteXYZ(OutcarData, FilePath = XYZPath)
         
         # Update RateAnalysis
         RateAnalysis = pd.concat([RateAnalysis, NewRateRow],
                                 ignore_index = True)
-        RateAnalysis.to_csv(f'{WorkDir}/RateAnalysis.csv', index = False)
-        PathToResults = os.path.join(RootDir, 'xyz_files', f'RateAnalysis_{TrajectoryName}.csv')
+        RateAnalysis.to_csv(RateAnalysisPath, index = False)
+        
+        PathToResults = RootDir / 'xyz_files' / f'RateAnalysis_{TrajectoryName}.csv'
+        
         RateAnalysis.to_csv(PathToResults, index = False)
         
         # Update POSCAR
