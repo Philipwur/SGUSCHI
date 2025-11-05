@@ -109,7 +109,7 @@ def PrepareWorkingDirectory():
     LogLines = []
     LogLines.append("Working Directory Prepared Sucessfully")
 
-    Temperatures = Params[RequiredKeys[0]]
+    Temperatures = eval(Params[RequiredKeys[0]])
     NSims = int(Params[RequiredKeys[1]])
     GasRatio = float(Params[RequiredKeys[2]])
     InitO2 = int(Params[RequiredKeys[3]])
