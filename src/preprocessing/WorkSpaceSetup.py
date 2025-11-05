@@ -109,10 +109,10 @@ def PrepareWorkingDirectory():
     LogLines = []
     LogLines.append("Working Directory Prepared Sucessfully")
 
-    Temperatures = Params[RequiredKeys[0]]
-    NSims = Params[RequiredKeys[1]]
-    GasRatio = Params[RequiredKeys[2]]
-    InitO2 = Params[RequiredKeys[3]]
+    Temperatures = int(Params[RequiredKeys[0]])
+    NSims = int(Params[RequiredKeys[1]])
+    GasRatio = float(Params[RequiredKeys[2]])
+    InitO2 = int(Params[RequiredKeys[3]])
 
     ForCopy = ["POTCAR", "job.in", "KPOINTS", "INCAR"]
 
