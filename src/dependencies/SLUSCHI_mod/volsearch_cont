@@ -11,7 +11,6 @@ endif
 set only = `getinfo.csh thmexp_only job.in`
 
 set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
-set -e
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 set temp = `getinfo.csh temp job.in`
 sed -i '/NBANDS/d' INCAR
