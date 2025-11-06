@@ -188,11 +188,11 @@ def main(WorkDir = None, TestCase = False):
     #Rename Elements in case of corruption
     Position = vio.FixElementFormatting(Position)
     
+    print(WorkDir)
     OutcarData = vio.OutcarParser(WorkDir)
-    print(OutcarData)
     Temperature = OutcarData['Temperature']
     
-    # This part returns empty
+    # This part returns empty for some reason
     SimTime = OutcarData['TimesFs'][-1]
     
     
