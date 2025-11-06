@@ -189,6 +189,7 @@ def main(WorkDir = None, TestCase = False):
     Position = vio.FixElementFormatting(Position)
     
     OutcarData = vio.OutcarParser(WorkDir)
+    print(OutcarData)
     Temperature = OutcarData['Temperature']
     
     # This part returns empty
