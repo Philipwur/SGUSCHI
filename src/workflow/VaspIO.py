@@ -975,16 +975,20 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
         ]
 
     return df
-'''
+
 #Testing OUTCAR Parser
 if __name__ == "__main__":
-    OUTCARData = OutcarParser(WorkDir="../../Test/OUTCAR")
-    print(OUTCARData['Temperature'], 'K\n')
-    print('Times (fs):', OUTCARData['TimesFs'], '\n')
-    print('Positions:', OUTCARData['Positions'], '\n')
-    print('Cell Vectors:', OUTCARData['CellVectors'], '\n')
     
-    for key in OUTCARData['Energies']:
-        print(f'{key} =', OUTCARData['Energies'][key], '\n') 
-'''
+    OUTCARData = OutcarParser(WorkDir="../../Test/OUTCAR")
+    
+    print(OUTCARData['Temperature'], 'K\n')
+    
+    print('Times (fs):', OUTCARData['TimesFs'][-1], '\n')
+    
+    #print('Positions:', OUTCARData['Positions'], '\n')
+    #print('Cell Vectors:', OUTCARData['CellVectors'], '\n')
+    
+    #for key in OUTCARData['Energies']:
+    #    print(f'{key} =', OUTCARData['Energies'][key], '\n') 
+
 # %%

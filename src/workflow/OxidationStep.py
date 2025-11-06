@@ -126,12 +126,11 @@ def main(WorkDir = None, TestCase = False):
     
     WorkDir = Path(WorkDir).resolve()
     
-    #------------------------- Gather Hyperparameters -------------------------
-    
-    
     #Location of Radii, Oxparams, Results/, xyz_files/ etc
     RootDir = WorkDir.parents[1]
     TrajectoryName = WorkDir.parent.name
+    
+    #------------------------- Gather Hyperparameters -------------------------
     
     #Collect hyperparameters
     
@@ -153,7 +152,6 @@ def main(WorkDir = None, TestCase = False):
     GasRatio = float(OxParams['GasRatio'])
     InitO2Count = int(OxParams['InitO2Count'])
         
-    
     #Collect Radii for Bond Algo
     
     CovalentRadiiPath = RootDir / 'CovalentRadii'
@@ -192,7 +190,10 @@ def main(WorkDir = None, TestCase = False):
     
     OutcarData = vio.OutcarParser(WorkDir)
     Temperature = OutcarData['Temperature']
+    
+    # This part returns empty
     SimTime = OutcarData['TimesFs'][-1]
+    
     
     #----------------------------- Analysis Steps -----------------------------
     
