@@ -494,44 +494,76 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
     NionsMatch = re.search(r"\bNIONS\s*=\s*(\d+)", OutcarText)
     Nions = int(NionsMatch.group(1)) if NionsMatch else 0
 
-    # --- Species (first contiguous POTCAR block) + counts → per-atom element labels ---
-    PotcarLineIndices = [I for I, L in enumerate(Lines) if "POTCAR:" in L]
-    Species: List[str] = []
-    if PotcarLineIndices:
-        StartIdx = PotcarLineIndices[0]
-        BlockLines: List[str] = []
-        I = StartIdx
-        while I < len(Lines) and "POTCAR:" in Lines[I]:
-            BlockLines.append(Lines[I])
-            I += 1
-        Periodic = set("""
-            H He Li Be B C N O F Ne Na Mg Al Si P S Cl Ar K Ca Sc Ti V Cr Mn Fe Co Ni Cu Zn Ga Ge As Se Br Kr
-            Rb Sr Y Zr Nb Mo Tc Ru Rh Pd Ag Cd In Sn Sb Te I Xe
-            Cs Ba La Ce Pr Nd Pm Sm Eu Gd Tb Dy Ho Er Tm Yb Lu
-            Hf Ta W Re Os Ir Pt Au Hg Tl Pb Bi Po At Rn
-            Fr Ra Ac Th Pa U Np Pu Am Cm Bk Cf Es Fm Md No Lr
-            Rf Db Sg Bh Hs Mt Ds Rg Cn Fl Lv Ts Og
-        """.split())
-        
-        for L in BlockLines:
-            Payload = L.split("POTCAR:")[1]
-            Tokens = Payload.replace("PAW_PBE", " ").replace("PAW-LDA", " ").split()
-            Element = None
-            for Tok in Tokens:
-                Base = Tok.split("_")[0]
-                if Base in Periodic:
-                    Element = Base
-                    break
-            if Element:
-                Species.append(Element)
-
+    # --- Species and counts (robust to Zr_sv, duplicates, and multi-block POTCAR) ---
     CountsMatch = re.search(r"ions\s+per\s+type\s*=\s*([0-9\.\s]+)", OutcarText, flags=re.I)
-    Counts = [int(X) for X in CountsMatch.group(1).split()] if CountsMatch else []
+    Counts: List[int] = [int(X) for X in CountsMatch.group(1).split()] if CountsMatch else []
+    TypesExpected: int = len(Counts)
+
+    def ExtractElementFromPotcarLine(Line: str) -> Optional[str]:
+        """
+        From: 'POTCAR:    PAW_PBE Zr_sv 04Jan2005'
+        Return: 'Zr'
+        From: 'POTCAR:    PAW_PBE O 08Apr2002'
+        Return: 'O'
+        """
+        PotcarPayloadMatch = re.search(r"POTCAR:\s*(.*)$", Line)
+        if not PotcarPayloadMatch:
+            return None
+        Payload = PotcarPayloadMatch.group(1)
+        # First token that looks like an element symbol with optional suffix (_sv, _pv, ...)
+        TokMatch = re.search(r"\b([A-Z][a-z]?)(?:_[A-Za-z0-9]+)?\b", Payload)
+        return TokMatch.group(1) if TokMatch else None
+
+    AllPotcarEls: List[str] = []
+    for L in Lines:
+        if "POTCAR:" in L:
+            El = ExtractElementFromPotcarLine(L)
+            if El:
+                AllPotcarEls.append(El)
+
+    # Deduplicate while preserving first occurrence order
+    Seen: set = set()
+    Species: List[str] = []
+    for El in AllPotcarEls:
+        if El not in Seen:
+            Species.append(El)
+            Seen.add(El)
+
+    # If we know how many types we expect, trim to that many (handles repeated POTCAR cycles)
+    if TypesExpected and len(Species) >= TypesExpected:
+        Species = Species[:TypesExpected]
+
+    # Fallback: if still mismatched, try reading POSCAR symbols and counts (VASP5-style)
+    if TypesExpected and len(Species) != TypesExpected:
+        PoscarPath = WorkDir / "POSCAR"
+        if PoscarPath.exists():
+            with open(PoscarPath, "r", encoding="utf-8", errors="ignore") as F:
+                PosLines = [Ln.strip() for Ln in F.readlines()[:12]]
+            # Comment line usually carries symbols, counts are the first all-integer line after lattice
+            CommentTokens: List[str] = PosLines[0].split() if PosLines else []
+            SpeciesFromPoscar: List[str] = []
+            for Tok in CommentTokens:
+                M = re.match(r"([A-Z][a-z]?)", Tok)
+                if M:
+                    SpeciesFromPoscar.append(M.group(1))
+            CountsFromPoscar: Optional[List[int]] = None
+            for Ln in PosLines[5:12]:
+                if re.fullmatch(r"(?:\d+\s+)+\d+", Ln):
+                    CountsFromPoscar = [int(X) for X in Ln.split()]
+                    break
+            if SpeciesFromPoscar and CountsFromPoscar and len(SpeciesFromPoscar) == len(CountsFromPoscar):
+                Species = SpeciesFromPoscar
+                Counts = CountsFromPoscar
+                TypesExpected = len(Counts)
+
+    # Build per-atom labels
     ElementsExpanded: List[str] = []
     if Species and Counts and len(Species) == len(Counts):
         for El, Cnt in zip(Species, Counts):
             ElementsExpanded.extend([El] * Cnt)
     elif Nions:
+        # As a last resort, avoid silent mislabeling: keep 'X' but log sizes for debugging
+        # print(f"[WARN] Could not align species and counts. Species={Species}, Counts={Counts}, NIONS={Nions}")
         ElementsExpanded = ["X"] * Nions
 
     # --- Cell (ISIF=2 → fixed cell). Parse the first 'direct lattice vectors' block ---
