@@ -977,13 +977,13 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
     return df
 
 #Testing OUTCAR Parser
-if __name__ == "__main__":
+#if __name__ == "__main__":
     
-    OUTCARData = OutcarParser(WorkDir="../../Test/OUTCAR")
+#    OUTCARData = OutcarParser(WorkDir="../Test/OUTCAR")
     
-    print(OUTCARData['Temperature'], 'K\n')
+#    print(OUTCARData['Temperature'], 'K\n')
     
-    print('Times (fs):', OUTCARData['TimesFs'][-1], '\n')
+#    print('Times (fs):', OUTCARData['TimesFs'][-1], '\n')
     
     #print('Positions:', OUTCARData['Positions'], '\n')
     #print('Cell Vectors:', OUTCARData['CellVectors'], '\n')

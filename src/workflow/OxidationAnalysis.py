@@ -820,185 +820,185 @@ def RemoveNonO2Gasses(
 
 # %%
 
-if __name__ == '__main__':
-    from typing import List, Dict, Tuple
-    from pathlib import Path
-    import pandas as pd
-    import numpy as np
+#if __name__ == '__main__':
+#    from typing import List, Dict, Tuple
+#    from pathlib import Path
+#    import pandas as pd
+#    import numpy as np
 
-    import VaspIO as vio   # per your request
+#    import VaspIO as vio   # per your request
                 # assumes FindGases, CalculateGasFraction are available
 
     # -------------------- Configuration ------------------------------------------
 
-    BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch")
+#    BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch")
 
     # Extend to cover all elements present
-    CovalentRadii: Dict[str, float] = {
-        "H": 0.31,
-        "C": 0.76,
-        "O": 0.66,
-        "Zr": 1.45,
-        # ...
-    }
+#    CovalentRadii: Dict[str, float] = {
+#        "H": 0.31,
+#        "C": 0.76,
+#        "O": 0.66,
+#        "Zr": 1.45,
+#        # ...
+#    }
 
-    AtomicRadiusTol = 1.30
-    MinimumComplexity = 2
-    MaximumComplexity = 3
+#    AtomicRadiusTol = 1.30
+#    MinimumComplexity = 2
+#    MaximumComplexity = 3
 
     # Free-gas fraction parameters
-    GasRatio = 2.0  # tune to your convention for an.CalculateGasFraction
+#    GasRatio = 2.0  # tune to your convention for an.CalculateGasFraction
 
-    # Timing assumptions (only for RateAnalysis “Time (fs)” in this harness)
-    FramesAreEveryNSteps = 80
-    TimeStepFs = 1.0
-    TimePerFrameFs = FramesAreEveryNSteps * TimeStepFs
-
-    # Smoothing & O2 added (constant per your request)
-    OxygenSmoothing = 0.001
-    O2AddedConstant = 10  # keep O2 Added fixed at initial oxygen number (10)
-
-    # -----------------------------------------------------------------------------
-
-    def ExponentialSmoothing(CurrentValue: float, PreviousSmoothed: float, Alpha: float) -> float:
-        return Alpha * CurrentValue + (1.0 - Alpha) * PreviousSmoothed
-
-
-    def RunGasDetectionBatch() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """
-        Loop folders 1..200 under BaseDirPath, read POSCARs via vio.ReadPoscar,
-        fix element formatting, run FindGases, and write:
-        - gas_results_per_frame.csv
-        - gas_counts_per_frame.csv
-        - RateAnalysis.csv (with fixed 'O2 Added' = 10 and 'Gas Removed' = non-O2 molecules)
-        """
-        AllRows: List[Dict] = []
-
-        # Initialize RateAnalysis with requested columns
-        RateAnalysisDf = pd.DataFrame([{
-            "Time (fs)": 0.0,
-            "O2 Count": 10,
-            "Smoothed O2 Count": 10,
-            "O2 Added": O2AddedConstant,  # fixed at 10 for all rows
-            "Gas Removed": "[]",
-            "Free Gas Fraction": 1.0,
-            'Molecules' : []
-        }])
-
-        RunningTimeFs = 0.0
-        PreviousSmoothed = 10
-
-        for FrameIndex in range(1, 201):
-            WorkDirPath = BaseDirPath / str(FrameIndex)
-            try:
-                Position, CellDim = vio.ReadPoscar(WorkDir=WorkDirPath)
-                Position = vio.FixElementFormatting(Position)
-            except FileNotFoundError:
-                print(f"[WARN] Skipping frame {FrameIndex}: POSCAR/CONTCAR not found in {WorkDirPath}")
-                continue
-            except Exception as Err:
-                print(f"[WARN] Skipping frame {FrameIndex}: {Err}")
-                continue
-
-            ResultDf = FindGases(
-                Position=Position,
-                CellDim=CellDim,
-                CovalentRadii=CovalentRadii,
-                AtomicRadiusTol=AtomicRadiusTol,
-                MinimumComplexity=MinimumComplexity,
-                MaximumComplexity=MaximumComplexity,
-                ReturnBondMatrix=False
-            )
-            print(ResultDf)
-            # Collect per-frame molecule rows (keep tuple formatting)
-            if not ResultDf.empty:
-                for Molecule, Indices in zip(ResultDf["Molecule"], ResultDf["Indices"]):
-                    AllRows.append({
-                        "Frame": FrameIndex,
-                        "Molecule": tuple(Molecule),
-                        "Indices": tuple(Indices),
-                    })
-            else:
-                AllRows.append({
-                    "Frame": FrameIndex,
-                    "Molecule": tuple(),
-                    "Indices": tuple(),
-                })
-
-            RunningTimeFs += TimePerFrameFs
-
-            # Free gas fraction
-            FreeGasFraction = float(CalculateGasFraction(Position, GasRatio))
-
-            # O2 count this frame
-            O2Count = int((ResultDf["Molecule"] == ('O', 'O')).sum()) if not ResultDf.empty else 0
-
-            # Smoothed O2
-            SmoothedO2Count = float(ExponentialSmoothing(O2Count, PreviousSmoothed, OxygenSmoothing))
-
-            # Molecules column for structure testing
-            MoleculesList = [] if ResultDf.empty else [tuple(m) for m in ResultDf["Molecule"].tolist()]
-            MoleculesStr = repr(MoleculesList)
-            
-            # Gas Removed: add any molecule which is NOT O2 (include duplicates if multiple present)
-            if ResultDf.empty:
-                GasRemovedStr = "[]"
-            else:
-                NonO2 = [tuple(m) for m in ResultDf["Molecule"].tolist() if tuple(m) != ('O', 'O')]
-                GasRemovedStr = repr(NonO2)
-
-            NewRow = {
-                "Time (fs)": RunningTimeFs,
-                "O2 Count": O2Count,
-                "Smoothed O2 Count": SmoothedO2Count,
-                "O2 Added": O2AddedConstant,          # remains 10
-                "Gas Removed": GasRemovedStr,         # non-O2 molecules for this frame
-                "Free Gas Fraction": FreeGasFraction,
-                "Molecules": MoleculesStr,   
-            }
-            RateAnalysisDf = pd.concat([RateAnalysisDf, pd.DataFrame([NewRow])], ignore_index=True)
-
-            PreviousSmoothed = SmoothedO2Count
-
-        # Build per-frame molecule counts (ignores empty markers)
-        ResultsPerFrame = pd.DataFrame(AllRows)
-        NonEmpty = ResultsPerFrame[ResultsPerFrame["Molecule"].apply(len) > 0]
-        if NonEmpty.empty:
-            CountsPerFrame = pd.DataFrame(columns=["Frame", "Molecule", "Count"])
-        else:
-            CountsPerFrame = (
-                NonEmpty
-                .groupby(["Frame", "Molecule"])
-                .size()
-                .reset_index(name="Count")
-                .sort_values(["Frame", "Count"], ascending=[True, False])
-                .reset_index(drop=True)
-            )
-
-        # Write CSVs
-        ResultsCsvPath = BaseDirPath / "gas_results_per_frame.csv"
-        CountsCsvPath = BaseDirPath / "gas_counts_per_frame.csv"
-        RateCsvPath = BaseDirPath / "RateAnalysis.csv"
-
-        ResultsPerFrame.to_csv(ResultsCsvPath, index=False)
-        CountsPerFrame.to_csv(CountsCsvPath, index=False)
-        RateAnalysisDf.to_csv(RateCsvPath, index=False)
-
-        print(f"Saved: {ResultsCsvPath}")
-        print(f"Saved: {CountsCsvPath}")
-        print(f"Saved: {RateCsvPath}")
-
-        return ResultsPerFrame, CountsPerFrame, RateAnalysisDf
-
-
-    if __name__ == "__main__":
-        ResultsPerFrame, CountsPerFrame, RateAnalysisDf = RunGasDetectionBatch()
-        print("\n=== RateAnalysis preview ===")
-        print(RateAnalysisDf.head(8))
-    # %%
-    BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch\RateAnalysis.csv")
-    df = vio.ReadRateAnalysis(BaseDirPath)
-    print(df['Molecules'][1][0][0])
-# %%
-
-
+#    # Timing assumptions (only for RateAnalysis “Time (fs)” in this harness)
+#    FramesAreEveryNSteps = 80
+#    TimeStepFs = 1.0
+#    TimePerFrameFs = FramesAreEveryNSteps * TimeStepFs
+#
+#    # Smoothing & O2 added (constant per your request)
+#    OxygenSmoothing = 0.001
+#    O2AddedConstant = 10  # keep O2 Added fixed at initial oxygen number (10)
+#
+#    # -----------------------------------------------------------------------------
+#
+#    def ExponentialSmoothing(CurrentValue: float, PreviousSmoothed: float, Alpha: float) -> float:
+#        return Alpha * CurrentValue + (1.0 - Alpha) * PreviousSmoothed
+#
+#
+#    def RunGasDetectionBatch() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+#        """
+#        Loop folders 1..200 under BaseDirPath, read POSCARs via vio.ReadPoscar,
+#        fix element formatting, run FindGases, and write:
+#        - gas_results_per_frame.csv
+#        - gas_counts_per_frame.csv
+#        - RateAnalysis.csv (with fixed 'O2 Added' = 10 and 'Gas Removed' = non-O2 molecules)
+#        """
+#        AllRows: List[Dict] = []
+#
+#        # Initialize RateAnalysis with requested columns
+#        RateAnalysisDf = pd.DataFrame([{
+#            "Time (fs)": 0.0,
+#            "O2 Count": 10,
+#            "Smoothed O2 Count": 10,
+#            "O2 Added": O2AddedConstant,  # fixed at 10 for all rows
+#            "Gas Removed": "[]",
+#            "Free Gas Fraction": 1.0,
+#            'Molecules' : []
+#        }])
+#
+#        RunningTimeFs = 0.0
+#        PreviousSmoothed = 10
+#
+#        for FrameIndex in range(1, 201):
+#            WorkDirPath = BaseDirPath / str(FrameIndex)
+#            try:
+#                Position, CellDim = vio.ReadPoscar(WorkDir=WorkDirPath)
+#                Position = vio.FixElementFormatting(Position)
+#            except FileNotFoundError:
+#                print(f"[WARN] Skipping frame {FrameIndex}: POSCAR/CONTCAR not found in {WorkDirPath}")
+#                continue
+#            except Exception as Err:
+#                print(f"[WARN] Skipping frame {FrameIndex}: {Err}")
+#                continue
+#
+#            ResultDf = FindGases(
+#                Position=Position,
+#                CellDim=CellDim,
+#                CovalentRadii=CovalentRadii,
+#                AtomicRadiusTol=AtomicRadiusTol,
+#                MinimumComplexity=MinimumComplexity,
+#                MaximumComplexity=MaximumComplexity,
+#                ReturnBondMatrix=False
+#            )
+#            print(ResultDf)
+#            # Collect per-frame molecule rows (keep tuple formatting)
+#            if not ResultDf.empty:
+#                for Molecule, Indices in zip(ResultDf["Molecule"], ResultDf["Indices"]):
+#                    AllRows.append({
+#                        "Frame": FrameIndex,
+#                        "Molecule": tuple(Molecule),
+#                        "Indices": tuple(Indices),
+#                    })
+#            else:
+#                AllRows.append({
+#                    "Frame": FrameIndex,
+#                    "Molecule": tuple(),
+#                    "Indices": tuple(),
+#                })
+#
+#            RunningTimeFs += TimePerFrameFs
+#
+#            # Free gas fraction
+#            FreeGasFraction = float(CalculateGasFraction(Position, GasRatio))
+#
+#            # O2 count this frame
+#            O2Count = int((ResultDf["Molecule"] == ('O', 'O')).sum()) if not ResultDf.empty else 0
+#
+#            # Smoothed O2
+#            SmoothedO2Count = float(ExponentialSmoothing(O2Count, PreviousSmoothed, OxygenSmoothing))
+#
+#            # Molecules column for structure testing
+#            MoleculesList = [] if ResultDf.empty else [tuple(m) for m in ResultDf["Molecule"].tolist()]
+#            MoleculesStr = repr(MoleculesList)
+#            
+#            # Gas Removed: add any molecule which is NOT O2 (include duplicates if multiple present)
+#            if ResultDf.empty:
+#                GasRemovedStr = "[]"
+#            else:
+#                NonO2 = [tuple(m) for m in ResultDf["Molecule"].tolist() if tuple(m) != ('O', 'O')]
+#                GasRemovedStr = repr(NonO2)
+#
+#            NewRow = {
+#                "Time (fs)": RunningTimeFs,
+#                "O2 Count": O2Count,
+#                "Smoothed O2 Count": SmoothedO2Count,
+#                "O2 Added": O2AddedConstant,          # remains 10
+#                "Gas Removed": GasRemovedStr,         # non-O2 molecules for this frame
+#                "Free Gas Fraction": FreeGasFraction,
+#                "Molecules": MoleculesStr,   
+#            }
+#            RateAnalysisDf = pd.concat([RateAnalysisDf, pd.DataFrame([NewRow])], ignore_index=True)
+#
+#            PreviousSmoothed = SmoothedO2Count
+#
+#        # Build per-frame molecule counts (ignores empty markers)
+#        ResultsPerFrame = pd.DataFrame(AllRows)
+#        NonEmpty = ResultsPerFrame[ResultsPerFrame["Molecule"].apply(len) > 0]
+#        if NonEmpty.empty:
+#            CountsPerFrame = pd.DataFrame(columns=["Frame", "Molecule", "Count"])
+#        else:
+#            CountsPerFrame = (
+#                NonEmpty
+#                .groupby(["Frame", "Molecule"])
+#                .size()
+#                .reset_index(name="Count")
+#                .sort_values(["Frame", "Count"], ascending=[True, False])
+#                .reset_index(drop=True)
+#            )
+#
+#        # Write CSVs
+#        ResultsCsvPath = BaseDirPath / "gas_results_per_frame.csv"
+#        CountsCsvPath = BaseDirPath / "gas_counts_per_frame.csv"
+#        RateCsvPath = BaseDirPath / "RateAnalysis.csv"
+#
+#        ResultsPerFrame.to_csv(ResultsCsvPath, index=False)
+#        CountsPerFrame.to_csv(CountsCsvPath, index=False)
+#        RateAnalysisDf.to_csv(RateCsvPath, index=False)
+#
+#        print(f"Saved: {ResultsCsvPath}")
+#        print(f"Saved: {CountsCsvPath}")
+#        print(f"Saved: {RateCsvPath}")
+#
+#        return ResultsPerFrame, CountsPerFrame, RateAnalysisDf
+#
+#
+#    if __name__ == "__main__":
+#        ResultsPerFrame, CountsPerFrame, RateAnalysisDf = RunGasDetectionBatch()
+#        print("\n=== RateAnalysis preview ===")
+#        print(RateAnalysisDf.head(8))
+#    # %%
+#    BaseDirPath = Path(r"C:\Users\pdwurzner\OneDrive - Delft University of Technology\Research\Shared_workspace\SGUSCHI\SGUSCHI\Test\873_1\Dir_VolSearch\RateAnalysis.csv")
+#    df = vio.ReadRateAnalysis(BaseDirPath)
+#    print(df['Molecules'][1][0][0])
+## %%
+#
+#

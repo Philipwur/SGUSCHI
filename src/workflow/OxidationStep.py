@@ -188,8 +188,18 @@ def main(WorkDir = None, TestCase = False):
     #Rename Elements in case of corruption
     Position = vio.FixElementFormatting(Position)
     
-    print(WorkDir)
+    print(f'WorkDir is {WorkDir}\n')
     OutcarData = vio.OutcarParser(WorkDir)
+    
+    print(OutcarData, '\n')
+    
+    print(f'Folder number is {len(RateAnalysis)}')
+
+    OutcarData = vio.OutcarParser(WorkDir / f'{len(RateAnalysis)}')
+
+    print('Attempt 2\n')
+    print(OutcarData, '\n')
+
     Temperature = OutcarData['Temperature']
     
     # This part returns empty for some reason
