@@ -477,7 +477,7 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
     Lines = OutcarText.splitlines()
     Header = OutcarText[:150000]
 
-       # --- Header tags: POTIM, TEBEG, TEEND ---
+    # --- Header tags: POTIM, TEBEG, TEEND ---
     def GetTagFloat(Tag: str) -> Optional[float]:
         Match = re.search(r"\b%s\s*=\s*([-\d\.Ee+]+)" % Tag, Header)
         return float(Match.group(1)) if Match else None
