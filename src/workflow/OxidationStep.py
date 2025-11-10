@@ -176,7 +176,9 @@ def main(WorkDir = None, TestCase = False):
                                      'Gas Removed': '[]',
                                      'Free Gas Fraction': 1
                                      }])
-        
+    
+    LatestFolder = len(RateAnalysis) #Prudent to add manual check of folder count
+    
     #------------------------- Gather Run Information -------------------------
 
 
@@ -187,22 +189,9 @@ def main(WorkDir = None, TestCase = False):
     
     #Rename Elements in case of corruption
     Position = vio.FixElementFormatting(Position)
-    
-    print(f'WorkDir is {WorkDir}\n')
-    OutcarData = vio.OutcarParser(WorkDir)
-    
-    print(OutcarData, '\n')
-    
-    print(f'Folder number is {len(RateAnalysis)}')
-
-    OutcarData = vio.OutcarParser(WorkDir / f'{len(RateAnalysis)}')
-
-    print('Attempt 2\n')
-    print(OutcarData, '\n')
+    OutcarData = vio.OutcarParser(WorkDir / LatestFolder)
 
     Temperature = OutcarData['Temperature']
-    
-    # This part returns empty for some reason
     SimTime = OutcarData['TimesFs'][-1]
     
     
