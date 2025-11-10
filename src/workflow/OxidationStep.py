@@ -117,8 +117,8 @@ def main(WorkDir = None, TestCase = False):
 
     Parameters:
         WorkDir (string): The location for Dir_Volsearch, where oxidation calculations are taking place
-        FreezePOSCAR (boolean): Option to run main without updating POSCAR, useful 
-                                when fixing/updating rateanalysis.
+        TestCase (boolean): Option to run main without updating Files 
+                                
     """
     
     if WorkDir == None:
@@ -200,9 +200,6 @@ def main(WorkDir = None, TestCase = False):
     
     GasFraction = an.CalculateGasFraction(Position, GasRatio)
     
-    
-    #Gasses should return the molecule structure (sorted in some way) and 
-    #their indices
     Gasses = an.FindGases(Position, 
                           CellDim, 
                           CovalentRadii = CovalentRadii,
@@ -299,43 +296,22 @@ def main(WorkDir = None, TestCase = False):
         print('Not Implemented yet')
     #First update RateAnalysis
     
-    # Steps
-    
-    # Analysis 
-    # Find Gas Fraction
-    # Find Gasses in POSCAR file
-    #- Some kind of indexing solution
-    # Remove Non-O2 Gasses from POSCAR and Velocities
-    # Adjust OTol based on volume change rel to initial volume
-    # Calculate Smoothed O2 Count
-    # If needed: 
-    ## Generate Boltzmann Velocities for O2 molecules
-    ## Find Optimal O2 Placement Sites
-    ## Add O2 molecules to Positions and Velocities 
-    ## Something with tracking atoms?
-    
-    # File Management
-    # Update RateAnalysis
-    # Update xyz trajectory file with new positions and data
-    # Some kind of new solution for misc OUTCAR data
-    # Update POSCAR
-    
     
 
-def FixRateAnalysis(WorkDir):
-    #Function that rewrites RateAnalysis if there have been issues in run
-    #or rateanalysis.csv structure has been updated
-    
-    if os.path.exists(f'{WorkDir}/RateAnalysis.csv'):
-        os.remove(f'{WorkDir}/RateAnalysis.csv')
-    
-    i = 1
-    while True:
-        if os.path.exists(f'{WorkDir}/{i}'):
-            main(WorkDir, FreezePOSCAR = True)
-            i += 1
-        else:
-            break
+#def FixRateAnalysis(WorkDir):
+#    #Function that rewrites RateAnalysis if there have been issues in run
+#    #or rateanalysis.csv structure has been updated
+#    
+#    if os.path.exists(f'{WorkDir}/RateAnalysis.csv'):
+#        os.remove(f'{WorkDir}/RateAnalysis.csv')
+#    
+#    i = 1
+#    while True:
+#        if os.path.exists(f'{WorkDir}/{i}'):
+#            main(WorkDir, FreezePOSCAR = True)
+#            i += 1
+#        else:
+#            break
  
     
 if __name__ == '__main__':
