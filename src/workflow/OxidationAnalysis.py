@@ -12,28 +12,16 @@ from typing import Dict, List, Tuple, Optional, Union, Set
 
 # Graveyard for now
 
-def ConvertCartesianToDirect(Position, CellDim):
-    
-    '''
-    Converts all x, y, z coordinates in a position dataframe from their cartesian
-    coordinates back to direct coordinates.
-    
-    Args:
-        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            coordinates ('x', 'y', 'z').
-        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
-    
-    Returns:
-        Position (pd.DataFrame): Atom positions with 'Element' and direct 
-            coordinates ('x', 'y', 'z') in angstrom.
-    '''
-    
-    CellDim = CellDim.to_numpy()
-    InvCellDim = np.linalg.inv(CellDim)
-    FracCoords = Position[['x','y','z']].to_numpy()
-    CartCoords = FracCoords @ InvCellDim
-    Position[['x','y','z']] = CartCoords
-    
+def ConvertCartesianToDirect(Position: pd.DataFrame, CellDim: pd.DataFrame) -> pd.DataFrame:
+    """
+    Convert Cartesian coordinates (Å) to direct (fractional, unitless).
+    Overwrites Position[['x','y','z']] in-place and returns Position.
+    """
+    CellMatrix = CellDim.to_numpy()
+    InvCellMatrix = np.linalg.inv(CellMatrix)
+    Cartesian = Position[['x', 'y', 'z']].to_numpy()
+    Direct = Cartesian @ InvCellMatrix
+    Position[['x', 'y', 'z']] = Direct
     return Position
 
 
