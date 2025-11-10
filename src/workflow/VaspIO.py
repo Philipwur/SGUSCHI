@@ -749,42 +749,30 @@ def WriteXYZ(
     OutcarData: Dict[str, Any],
     FilePath: Union[str, os.PathLike],
     TailBytes: int = 2 * 1024 * 1024,
+    ExtendedXYZ: bool = True,
+    CoordMode: str = "Cartesian",
+    PbcTuple: Tuple[bool, bool, bool] = (True, True, True),
 ) -> None:
     """
-    Write or append VASP trajectory frames to a standard XYZ file (Cartesian, Å).
-    Automatically appends if the file already exists.
+    Write or append trajectory frames to XYZ.
 
-    Args:
-        OutcarData (dict): Parsed output from OutcarParser containing:
-            {
-              "CellVectors": pd.DataFrame (3×3 lattice vectors, cols ["x","y","z"]),
-              "Positions":  [pd.DataFrame(...)] in fractional coords,
-              "Energies":   pd.DataFrame with Step, EFree, ETotal, Temperature, Pressure,
-              "TimesFs":    list of cumulative times (fs)
-            }
-        FilePath (str or Path): Output .xyz file.
-        TailBytes (int): Max bytes to read from file end to detect last Step/Time when appending.
-
-    Notes:
-        - Writes **Cartesian coordinates** only (Å).
-        - The comment line contains:
-            Step, Time(fs), EFree(eV), ETotal(eV), Temperature(K), Pressure(kB)
-        - If the file already exists, new frames are appended with correct step/time offsets.
+    - CoordMode="Cartesian" → writes Å (default).
+    - CoordMode="Direct"    → writes fractional (unitless).
+    - ExtendedXYZ=True      → embed cell + properties in the comment line
+                              (recognized by ASE/OVITO/etc.).
     """
-
-    # --- Unpack data ---
+    # --- Unpack ---
     CellDF: pd.DataFrame = OutcarData["CellVectors"]
-    CellMatrix = CellDF[["x", "y", "z"]].values  # 3×3 lattice vectors
+    CellMatrix = CellDF[["x", "y", "z"]].values  # shape (3,3)
     PositionsList: List[pd.DataFrame] = OutcarData["Positions"]
     EnergiesDF: pd.DataFrame = OutcarData["Energies"]
     TimesFsList: List[float] = OutcarData["TimesFs"]
 
-    # Sanity check
     NumFrames = min(len(PositionsList), len(TimesFsList), len(EnergiesDF))
     if NumFrames == 0:
         return
 
-    # --- Prepare append offsets ---
+    # --- Append offsets (unchanged) ---
     StepOffset = 0
     TimeOffset = 0.0
     FilePathStr = os.fspath(FilePath)
@@ -799,7 +787,6 @@ def WriteXYZ(
                 TailBytesData = FileHandle.read()
             TailText = TailBytesData.decode("utf-8", errors="ignore")
 
-            # Parse last Step and Time(fs)
             StepMatches = list(re.finditer(r"Step\s*=\s*(\d+)", TailText))
             TimeMatches = list(re.finditer(r"Time\(fs\)\s*=\s*([-\d\.Ee+]+)", TailText))
             if StepMatches:
@@ -807,7 +794,6 @@ def WriteXYZ(
             if TimeMatches:
                 TimeOffset = float(TimeMatches[-1].group(1))
 
-            # Ensure newline before appending
             with open(FilePathStr, "rb") as FileHandle:
                 FileHandle.seek(-1, os.SEEK_END)
                 if FileHandle.read(1) != b"\n":
@@ -819,40 +805,65 @@ def WriteXYZ(
     else:
         os.makedirs(os.path.dirname(os.path.abspath(FilePathStr)) or ".", exist_ok=True)
 
+    # --- Build Extended XYZ header pieces ---
+    LatticeFlat = [float(X) for Row in CellMatrix for X in Row]  # row-major a,b,c
+    LatticeStr = " ".join(f"{V:.10f}" for V in LatticeFlat)
+    PbcStr = " ".join("T" if B else "F" for B in PbcTuple)
+
+    # Property tag depends on coord mode
+    if CoordMode.lower() == "direct":
+        PropTag = "Properties=species:S:1:frac:R:3"
+    else:
+        PropTag = "Properties=species:S:1:pos:R:3"
+
     # --- Write frames ---
     Mode = "a" if AppendMode else "w"
     with open(FilePathStr, Mode, encoding="utf-8") as OutFile:
         for FrameIndex in range(NumFrames):
             PositionFrac = PositionsList[FrameIndex]
             Elements = PositionFrac["Element"].tolist()
+            FracArray = PositionFrac[["x", "y", "z"]].values
 
-            # Convert fractional → Cartesian
-            CartesianCoords = PositionFrac[["x", "y", "z"]].values @ CellMatrix
+            if CoordMode.lower() == "direct":
+                CoordsToWrite = FracArray  # unitless
+            else:
+                CoordsToWrite = FracArray @ CellMatrix  # Å
 
-            # Retrieve energy/scalar data
             EnergyRow = EnergiesDF.iloc[FrameIndex]
             StepNumber = int(EnergyRow.get("Step", FrameIndex + 1)) + StepOffset
             TimeFs = float(TimesFsList[FrameIndex]) + TimeOffset
-            EFree = EnergyRow.get("EFree", np.nan)
-            ETotal = EnergyRow.get("ETotal", np.nan)
-            TemperatureK = EnergyRow.get("Temperature", np.nan)
-            PressureKB = EnergyRow.get("Pressure", np.nan)
+            EFree = float(EnergyRow.get("EFree", np.nan))
+            ETotal = float(EnergyRow.get("ETotal", np.nan))
+            TemperatureK = float(EnergyRow.get("Temperature", np.nan))
+            PressureKB = float(EnergyRow.get("Pressure", np.nan))
 
             # Comment line
-            CommentLine = (
-                f"Step = {StepNumber}  "
-                f"Time(fs) = {TimeFs:.6f}  "
-                f"EFree = {EFree:.6f} eV  "
-                f"ETotal = {ETotal:.6f} eV  "
-                f"T = {TemperatureK:.2f} K  "
-                f"P = {PressureKB:.3f} kB"
-            )
+            if ExtendedXYZ:
+                CommentLine = (
+                    f'Lattice="{LatticeStr}" '
+                    f'{PropTag} '
+                    f'pbc="{PbcStr}" '
+                    f"Step={StepNumber} "
+                    f"Time_fs={TimeFs:.6f} "
+                    f"EFree_eV={EFree:.6f} "
+                    f"ETotal_eV={ETotal:.6f} "
+                    f"Temperature_K={TemperatureK:.2f} "
+                    f"Pressure_kB={PressureKB:.3f}"
+                )
+            else:
+                CommentLine = (
+                    f"Step = {StepNumber}  "
+                    f"Time(fs) = {TimeFs:.6f}  "
+                    f"EFree = {EFree:.6f} eV  "
+                    f"ETotal = {ETotal:.6f} eV  "
+                    f"T = {TemperatureK:.2f} K  "
+                    f"P = {PressureKB:.3f} kB"
+                )
 
-            # Write XYZ frame
             OutFile.write(f"{len(Elements)}\n")
             OutFile.write(CommentLine + "\n")
-            for Element, (X, Y, Z) in zip(Elements, CartesianCoords):
-                OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n")  
+            for Element, (X, Y, Z) in zip(Elements, CoordsToWrite):
+                OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n") 
 
   
 def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
