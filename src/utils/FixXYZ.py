@@ -18,10 +18,10 @@ from workflow import VaspIO as vio
 How to use this script:
 
 From any given directory you can run:
-> python path/to/SGUSCHI/src/utils/FixRateAnalysis.py /path/to/Dir_VolSearch
+> python path/to/SGUSCHI/src/utils/FixXYZ.py /path/to/Dir_VolSearch
 
 Or if you’re already in Dir_VolSearch:
-> python src/utils/FixRateAnalysis.py
+> python src/utils/FixXYZ.py
 
 There's a lot of IO required for this script, so expect about 1 minute per 50
 VolSearch folders.
