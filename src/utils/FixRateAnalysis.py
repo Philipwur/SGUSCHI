@@ -21,13 +21,16 @@ from workflow.OxidationStep import ExponentialSmoothing, CreateGassesRemovedStr
 
 '''
 -------------------------------------------------------------------------------
-How to this script:
+How to use this script:
 
 From any given directory you can run:
 > python path/to/SGUSCHI/src/utils/FixRateAnalysis.py /path/to/Dir_VolSearch
 
 Or if you’re already in Dir_VolSearch:
 > python src/utils/FixRateAnalysis.py
+
+There's a lot of IO required for this script, so expect about 1 minute per 50
+VolSearch folders.
 
 tqdm functionality is optional, other imports arent.
 -------------------------------------------------------------------------------
