@@ -219,12 +219,24 @@ def main(WorkDir = None, TestCase = False):
     
     O2Tol = O2Tol * GasFraction
     
-    #Check that this works
-    O2Count = len(Gasses[Gasses['Molecule'] == ('O', 'O')].index)
+    SmoothedO2Count = RateAnalysis['Smoothed O2 Count'].iloc[-1]
     
-    SmoothedO2Count = ExponentialSmoothing(O2Count, 
-                                           RateAnalysis['Smoothed O2 Count'].iloc[-1],
-                                           alpha = OxygenSmoothing)
+    #Smooth O for each frame of outcar
+    for OutcarPosition in OutcarData['Positions']:
+        
+        FrameGasses = an.FindGases(OutcarPosition, 
+                                   CellDim, 
+                                   CovalentRadii = CovalentRadii,
+                                   AtomicRadiusTol = AtomicRadiusTol, 
+                                   MinimumComplexity = 2,
+                                   MaximumComplexity = 3,
+                                   ReturnBondMatrix = False)
+        
+        O2Count = len(FrameGasses[FrameGasses['Molecule'] == ('O', 'O')].index)
+    
+        SmoothedO2Count = ExponentialSmoothing(O2Count, 
+                                               SmoothedO2Count,
+                                               alpha = OxygenSmoothing)
     
     #Condition met to add 1 O2
     if SmoothedO2Count <= O2Tol and O2Count < O2Tol:

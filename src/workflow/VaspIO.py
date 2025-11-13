@@ -1022,9 +1022,11 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
 #Testing OUTCAR Parser
 #if __name__ == "__main__":
     
-#    OUTCARData = OutcarParser(WorkDir="../Test/OUTCAR")
+    #OUTCARData = OutcarParser(WorkDir="../Test/OUTCAR")
     
-#    print(OUTCARData['Temperature'], 'K\n')
+    #for Position in OUTCARData['Positions'][:1]:
+    #    print(Position, '\n')
+    #print(OUTCARData['Positions'], 'K\n')
     
 #    print('Times (fs):', OUTCARData['TimesFs'][-1], '\n')
     
