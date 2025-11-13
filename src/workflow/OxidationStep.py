@@ -258,6 +258,10 @@ def main(WorkDir = None, TestCase = False):
                                        NewVelocity,
                                        ElementSymbol = 'O')
         
+        #WAVECAR no longer good starting point for calculation
+        if os.path.exists(f'{WorkDir}/WAVECAR'):
+            os.remove(f'{WorkDir}/WAVECAR')
+            
         O2Count += 1
         O2Added = 1
     else:
