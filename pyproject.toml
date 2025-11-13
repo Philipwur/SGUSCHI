@@ -1,0 +1,20 @@
+[project]
+name = "sguschi"
+version = "0.1.0"
+description = "SGUSCHI Python project"
+authors = [
+    { name = "Your Name", email = "your.email@domain.com" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+
+[project.urls]
+Homepage = "https://github.com/yourusername/sguschi"
+
+[tool.setuptools]
+packages = ["sguschi"]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
