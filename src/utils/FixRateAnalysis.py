@@ -10,7 +10,6 @@ try:
 except ImportError:
     Tqdm = None
 
-# Make "src" importable so we can do "from workflow import ..."
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
