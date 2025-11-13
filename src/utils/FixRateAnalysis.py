@@ -3,9 +3,15 @@ import sys
 from pathlib import Path
 from typing import Union, Dict
 
-import numpy as np
 import pandas as pd
 
+# Optional tqdm progress bar
+try:
+    from tqdm import tqdm as Tqdm
+except ImportError:
+    Tqdm = None
+
+# Make "src" importable so we can do "from workflow import ..."
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
@@ -14,15 +20,17 @@ from workflow.OxidationStep import ExponentialSmoothing, CreateGassesRemovedStr
 
 
 '''
+-------------------------------------------------------------------------------
 How to this script:
 
+From any given directory you can run:
+> python path/to/SGUSCHI/src/utils/FixRateAnalysis.py /path/to/Dir_VolSearch
 
-From the repo root (so src is under it), you can run e.g.:
+Or if you’re already in Dir_VolSearch:
+> python src/utils/FixRateAnalysis.py
 
->python src/utils/FixRateAnalysis.py /path/to/Dir_VolSearch
-
-or, if you’re already in Dir_VolSearch:
-
+tqdm functionality is optional, other imports arent.
+-------------------------------------------------------------------------------
 '''
 
 
@@ -33,7 +41,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
     - Reads OxParams and CovalentRadii from the project RootDir.
     - Loops over all numbered subfolders in WorkDir (1, 2, 3, ...).
     - For each folder, reads OUTCAR data via vio.OutcarParser.
-    - Applies the *frame-wise* exponential smoothing you added.
+    - Applies frame-wise exponential smoothing.
     - Recomputes O2 totals, cumulative O2 added, gas removal, gas fraction.
     - Writes the repaired RateAnalysis.csv:
         - in WorkDir
@@ -119,7 +127,6 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
     )
 
     if not StepFolders:
-        # Nothing to do, just write the initial row
         RateAnalysisPathWorkDir = WorkDir / "RateAnalysis.csv"
         RateAnalysisPathRoot = RootDir / "xyz_files" / ("RateAnalysis_%s.csv" % TrajectoryName)
 
@@ -131,9 +138,14 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
 
         return RateAnalysis
 
+    # Decide whether to wrap with tqdm
+    StepIterable = StepFolders
+    if Tqdm is not None:
+        StepIterable = Tqdm(StepFolders, desc="FixRateAnalysis", unit="step")
+
     # -------------------------- Rebuild step by step --------------------------
 
-    for StepIndex in StepFolders:
+    for StepIndex in StepIterable:
         OutcarPath = WorkDir / str(StepIndex)
         OutcarData = vio.OutcarParser(OutcarPath)
 
@@ -149,7 +161,6 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
         O2CountLastFrame = 0
 
         for OutcarPosition in OutcarData["Positions"]:
-            
             FrameGasses = an.FindGases(
                 OutcarPosition,
                 CellDim,
@@ -174,7 +185,6 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
                 O2CountLastFrame = int(
                     (FrameGasses["Molecule"] == ("O", "O")).sum()
                 )
-            
             else:
                 O2CountLastFrame = 0
 
@@ -186,7 +196,6 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
 
         # ------------------- Gas fraction / removal for this step -------------------
 
-        # Use last frame of this OUTCAR for gas analysis
         PositionLast = OutcarData["Positions"][-1]
         PositionLast = vio.FixElementFormatting(PositionLast)
 
