@@ -5,7 +5,6 @@ from typing import Union, Dict
 
 import pandas as pd
 
-# Optional tqdm progress bar
 try:
     from tqdm import tqdm as Tqdm
 except ImportError:
