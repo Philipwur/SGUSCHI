@@ -126,7 +126,7 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
         IsConsecutive = len(MissingSteps) == 0
         
         if not IsConsecutive:
-            raise ValueError(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nFATAL: RollBack to {min(MissingSteps) - 1} required.')
+            print(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nRollBack to {min(MissingSteps) - 1} reccomended.')
         
     LatestFolder = max(StepFolders)
     
