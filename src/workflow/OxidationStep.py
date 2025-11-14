@@ -17,8 +17,6 @@ from workflow import VaspIO as vio
 from workflow import OxidationAnalysis as an
 
 
-
-
 def ExponentialSmoothing(f1: Union[float, int], f2: Union[float, int], 
                          alpha: float = 0.001) -> float:
     """
@@ -126,7 +124,7 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
         IsConsecutive = len(MissingSteps) == 0
         
         if not IsConsecutive:
-            print(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nRollBack to {min(MissingSteps) - 1} reccomended.')
+            print(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nRollBack to {min(MissingSteps) - 1} for complete RateAnalysis and XYZ.')
         
     LatestFolder = max(StepFolders)
     
