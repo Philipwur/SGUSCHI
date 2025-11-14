@@ -261,7 +261,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
         )
         
     # Drop the final row to allow OxidationStep to append latest simulation when run from folder
-    RateAnalysis.drop(index=RateAnalysis.index[-1],axis=0,inplace=True)
+    #RateAnalysis.drop(index=RateAnalysis.index[-1],axis=0,inplace=True)
     
     # ---------------------------- Write results out ----------------------------
 

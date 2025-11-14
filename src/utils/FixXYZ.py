@@ -74,7 +74,7 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
             f"No numbered step folders (e.g. '1', '2', ...) found in {WorkDir}"
         )
 
-    StepIterable = StepFolders[:-1]
+    StepIterable = StepFolders
     if tqdm is not None:
         StepIterable = tqdm(StepFolders, desc="FixXYZ", unit="step")
 
