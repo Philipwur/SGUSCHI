@@ -146,7 +146,7 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
         
         print('Running FixRateAnalysis...')
         FixRateAnalysis(WorkDir)
-        print('Done./nRunning FixXYZ...')
+        print('Done.\nRunning FixXYZ...')
         FixXYZ(WorkDir)
         print('Done.')
         
