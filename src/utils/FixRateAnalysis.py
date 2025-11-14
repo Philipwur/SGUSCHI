@@ -31,6 +31,8 @@ There's a lot of IO required for this script, so expect about 1 minute per 50
 VolSearch folders.
 
 tqdm functionality is optional, other imports arent.
+This script drops the final row of rateanalysis so that oxidation step can work
+(it needs to append latest simulation to rateanalysis).
 -------------------------------------------------------------------------------
 '''
 
@@ -257,7 +259,10 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
             [RateAnalysis, NewRateRow],
             ignore_index=True,
         )
-
+        
+    # Drop the final row to allow OxidationStep to append latest simulation when run from folder
+    RateAnalysis.drop(index=RateAnalysis.index[-1],axis=0,inplace=True)
+    
     # ---------------------------- Write results out ----------------------------
 
     RateAnalysisPathWorkDir = WorkDir / "RateAnalysis.csv"
