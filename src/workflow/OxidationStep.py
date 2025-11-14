@@ -116,8 +116,10 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
     #Check for missing folders
     if len(StepFolders) != 1:
         
-        StepSet = set(SortedSteps)
         SortedSteps = sorted(set(StepFolders))
+        
+        StepSet = set(SortedSteps)
+       
         ExpectedRange = range(SortedSteps[0], SortedSteps[-1] + 1)
         MissingSteps = [Step for Step in ExpectedRange if Step not in StepSet]
         
