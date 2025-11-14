@@ -18,6 +18,7 @@ from workflow import OxidationAnalysis as an
 
 
 
+
 def ExponentialSmoothing(f1: Union[float, int], f2: Union[float, int], 
                          alpha: float = 0.001) -> float:
     """
@@ -101,6 +102,61 @@ def CreateGassesRemovedStr(Gasses) -> str:
     return repr(NonO2)
 
 
+def CheckSimulationEnvironment(WorkDir: Path) -> None:
+    
+    #Function which checks if:
+    #RateAnalysis.csv matches the number of folders in WorkDir.
+        #If not, runs FixRateAnalysis and FixXYZ to repair the folder
+    #Any Folders are missing.
+        #Produces error, reccomends rollback to earlis.
+
+    StepFolders = [
+        int(d.name)
+        for d in WorkDir.iterdir() 
+        if d.is_dir() and d.name.isdigit()]
+    
+    #Check for missing folders
+    if len(StepFolders) != 1:
+        
+        StepSet = set(SortedSteps)
+        SortedSteps = sorted(set(StepFolders))
+        ExpectedRange = range(SortedSteps[0], SortedSteps[-1] + 1)
+        MissingSteps = [Step for Step in ExpectedRange if Step not in StepSet]
+        
+        IsConsecutive = len(MissingSteps) == 0
+        
+        if not IsConsecutive:
+            raise ValueError(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nFATAL: RollBack to {min(MissingSteps) - 1} required.')
+        
+    LatestFolder = max(StepFolders)
+    
+    try:
+        RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
+        RateAnalysisSize = len(RateAnalysis)
+    except:
+        RateAnalysisSize = 1
+    
+    # Check if RateAnalysis size matches folder count
+    if RateAnalysisSize != LatestFolder:
+        
+        print('RateAnalysis.csv entries do not match Dir_VolSearch.')
+        
+        from utils.FixRateAnalysis import FixRateAnalysis
+        from utils.FixXYZ import FixXYZ
+        
+        print('Running FixRateAnalysis...')
+        FixRateAnalysis(WorkDir)
+        print('Done./nRunning FixXYZ...')
+        FixXYZ(WorkDir)
+        print('Done.')
+        
+        RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
+        RateAnalysisSize = len(RateAnalysis)
+    
+        if RateAnalysisSize != LatestFolder:
+            raise ValueError('RateAnalysis.csv entries still do not match Dir_VolSearch after Fix utilities.\nFATAL: RollBack required.')
+    
+
 def main(WorkDir = None, TestCase = False):
     
     """
@@ -130,10 +186,11 @@ def main(WorkDir = None, TestCase = False):
     RootDir = WorkDir.parents[1]
     TrajectoryName = WorkDir.parent.name
     
+    #Verify no missing folders, RateAnalysis coherence
+    CheckSimulationEnvironment(WorkDir)
+    
     #------------------------- Gather Hyperparameters -------------------------
-    
-    #Collect hyperparameters
-    
+        
     OxParamsPath = RootDir / 'OxParams'
     
     if not OxParamsPath.exists():
