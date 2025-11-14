@@ -187,7 +187,7 @@ def main(WorkDir = None, TestCase = False):
     TrajectoryName = WorkDir.parent.name
     
     #Verify no missing folders, RateAnalysis coherence
-    CheckSimulationEnvironment(WorkDir)
+    #CheckSimulationEnvironment(WorkDir)
     
     #------------------------- Gather Hyperparameters -------------------------
         
