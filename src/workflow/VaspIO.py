@@ -744,11 +744,10 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         "CellVectors": CellVectors,
     }
 
-def _ReadLastFrameMetadata(FilePath: str, ) -> Tuple[int, float]:
+def _ReadLastFrameMetadata(FilePath: str) -> Tuple[int, float]:
     """
     Efficiently read the last frame's Step and Time from an XYZ file.
-    
-    Helper function for writing/appending XYZ files during runtime.
+    Helper function for WriteXYZ to support appending without reading whole file.
     
     Args:
         FilePath: Path to the XYZ file
@@ -785,7 +784,9 @@ def _ReadLastFrameMetadata(FilePath: str, ) -> Tuple[int, float]:
                         StepOffset = int(StepMatch.group(1))
                     
                     # Try to extract Time (handle both formats)
-                    TimeMatch = re.search(r'Time[_\(]fs[_\)]\s*=\s*([-\d\.Ee+]+)', Line)
+                    # Format 1: Time_fs=80.000000
+                    # Format 2: Time(fs) = 80.000000
+                    TimeMatch = re.search(r'Time[_\(]fs[_\)]?\s*=\s*([-\d\.Ee+]+)', Line)
                     if TimeMatch:
                         TimeOffset = float(TimeMatch.group(1))
                     
