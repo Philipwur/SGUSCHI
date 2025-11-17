@@ -837,7 +837,7 @@ def WriteXYZ(
         # Efficiently read only the last frame's metadata
         StepOffset, LastFrameTime = _ReadLastFrameMetadata(FilePathStr)
         
-        # Calculate timestep from new data to avoid time duplication
+        # Calculate timestep from new data
         if len(TimesFsList) >= 2:
             Timestep = TimesFsList[1] - TimesFsList[0]
         elif len(TimesFsList) == 1:
@@ -845,8 +845,13 @@ def WriteXYZ(
         else:
             Timestep = 0.0
         
-        # Continue from after the last frame
-        TimeOffset = LastFrameTime + Timestep
+        # Calculate offset so first new frame is at LastFrameTime + Timestep
+        # Formula: TimesFsList[0] + TimeOffset = LastFrameTime + Timestep
+        # Therefore: TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
+        if len(TimesFsList) > 0:
+            TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
+        else:
+            TimeOffset = LastFrameTime + Timestep
         
         # Ensure file ends with newline
         try:
