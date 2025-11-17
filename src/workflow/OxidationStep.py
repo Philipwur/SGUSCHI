@@ -301,15 +301,15 @@ def main(WorkDir = None, TestCase = False):
         
         OptimalSite = an.FindOptimalCoords(Position,
                                            CellDim,
-                                           n = 1)
+                                           N = 1)
         
         Position = an.PlaceO2Molecules(Position,
                                     CellDim,
                                     OptimalSite,
                                     BondLength = 1.2)
         
-        NewVelocity = an.MaxwellBoltzmannVelocities(Temperature,
-                                                    ['O', 'O'])
+        NewVelocity = an.MaxwellBoltzmannVelocities(['O', 'O'],
+                                                    Temperature)
 
         Velocity = InsertNewVelocities(Velocity,
                                        NewVelocity,
