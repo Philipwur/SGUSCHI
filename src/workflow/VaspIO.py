@@ -880,12 +880,15 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
                 "Positions": [pd.DataFrame],   # One per frame, columns ["Element","x","y","z"]
                 "Metadata":  pd.DataFrame,     # One row per frame:
                                                # ["Step","TimeFs","EFree","ETotal","Temperature","Pressure"]
+                "CellDim":   pd.DataFrame,     # Averaged lattice vectors, 3 rows × 3 columns ["x","y","z"]
             }
 
     Notes:
         - The function expects comment lines in the format used by WriteXYZ:
             Step = <int>  Time(fs) = <float>  EFree = <float> eV  ETotal = <float> eV
             T = <float> K  P = <float> kB
+        - Also extracts Lattice information from both old and new XYZ formats
+        - Averages the first and last lattice to create CellDim
         - Automatically handles both single-frame and multi-frame XYZ files.
         - Skips malformed frames gracefully.
     """
@@ -896,6 +899,7 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
 
     PositionsList: List[pd.DataFrame] = []
     MetadataRows: List[Dict[str, Any]] = []
+    LatticeList: List[np.ndarray] = []
 
     with open(FilePathStr, "r", encoding="utf-8", errors="ignore") as File:
         while True:
@@ -917,13 +921,26 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
             Step = TimeFs = EFree = ETotal = Temperature = Pressure = np.nan
 
             if Comment:
+                # Extract lattice information
+                LatticeMatch = re.search(r'Lattice="([^"]+)"', Comment)
+                if LatticeMatch:
+                    LatticeStr = LatticeMatch.group(1)
+                    try:
+                        LatticeValues = [float(x) for x in LatticeStr.split()]
+                        if len(LatticeValues) == 9:
+                            # Reshape to 3x3 matrix (row-major order)
+                            LatticeMatrix = np.array(LatticeValues).reshape(3, 3)
+                            LatticeList.append(LatticeMatrix)
+                    except (ValueError, AttributeError):
+                        pass
+
                 # Extract metadata via regex
                 StepMatch = re.search(r"Step\s*=\s*(\d+)", Comment)
-                TimeMatch = re.search(r"Time\(fs\)\s*=\s*([-\d\.Ee+]+)", Comment)
-                EFreeMatch = re.search(r"EFree\s*=\s*([-\d\.Ee+]+)", Comment)
-                ETotalMatch = re.search(r"ETotal\s*=\s*([-\d\.Ee+]+)", Comment)
-                TempMatch = re.search(r"T\s*=\s*([-\d\.Ee+]+)", Comment)
-                PressMatch = re.search(r"P\s*=\s*([-\d\.Ee+]+)", Comment)
+                TimeMatch = re.search(r"Time[_\(]fs[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                EFreeMatch = re.search(r"EFree[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                ETotalMatch = re.search(r"ETotal[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                TempMatch = re.search(r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                PressMatch = re.search(r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
 
                 if StepMatch:
                     Step = int(StepMatch.group(1))
@@ -976,9 +993,27 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
     # --- Build metadata DataFrame ---
     MetadataDF = pd.DataFrame(MetadataRows)
 
+    # --- Build CellDim DataFrame from averaged first and last lattice ---
+    CellDimDF = None
+    if LatticeList:
+        if len(LatticeList) == 1:
+            # Only one frame, use that lattice
+            AveragedLattice = LatticeList[0]
+        else:
+            # Average first and last lattice
+            FirstLattice = LatticeList[0]
+            LastLattice = LatticeList[-1]
+            AveragedLattice = (FirstLattice + LastLattice) / 2.0
+        
+        CellDimDF = pd.DataFrame(
+            AveragedLattice,
+            columns=["x", "y", "z"]
+        )
+
     return {
         "Positions": PositionsList,
         "Metadata": MetadataDF,
+        "CellDim": CellDimDF,
     }
     
 
