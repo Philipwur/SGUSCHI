@@ -260,7 +260,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
             ignore_index=True,
         )
         
-    # Drop the final row to allow OxidationStep to append latest simulation when run from folder
+    # Drop the final row to allow OxidationStep to append latest simulation when run from folder (this is incorrect)
     #RateAnalysis.drop(index=RateAnalysis.index[-1],axis=0,inplace=True)
     
     # ---------------------------- Write results out ----------------------------

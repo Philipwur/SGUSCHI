@@ -235,7 +235,7 @@ def main(WorkDir = None, TestCase = False):
                                      }])
     
     LatestFolder = len(RateAnalysis) #Prudent to add manual check of folder count
-    
+    print(f'Expecting to read folder {LatestFolder}')
     #------------------------- Gather Run Information -------------------------
 
 
