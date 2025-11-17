@@ -1,20 +1,28 @@
 [project]
 name = "sguschi"
 version = "0.1.0"
-description = "SGUSCHI Python project"
+description = "Small-cell oxidation simulation workflow for VASP MD"
 authors = [
-    { name = "Your Name", email = "your.email@domain.com" }
+    { name = "Philip Wurzner"}
 ]
 readme = "README.md"
-license = { file = "LICENSE" }
 requires-python = ">=3.8"
+dependencies = [
+    "pandas>=1.3.0",
+    "numpy>=1.20.0",
+    "scipy>=1.7.0",
+]
 
-[project.urls]
-Homepage = "https://github.com/yourusername/sguschi"
-
-[tool.setuptools]
-packages = ["sguschi"]
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=22.0",
+    "ruff>=0.1.0",
+]
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
