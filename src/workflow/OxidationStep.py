@@ -141,21 +141,21 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
         
         print('RateAnalysis.csv entries do not match Dir_VolSearch.')
         
-        from utils.FixRateAnalysis import FixRateAnalysis
-        from utils.FixXYZ import FixXYZ
-        
-        print('Running FixRateAnalysis...')
-        FixRateAnalysis(WorkDir)
-        print('Done.\nRunning FixXYZ...')
-        FixXYZ(WorkDir)
-        print('Done.')
-        
-        RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
-        RateAnalysisSize = len(RateAnalysis)
-    
-        if RateAnalysisSize != LatestFolder:
-            raise ValueError('RateAnalysis.csv entries still do not match Dir_VolSearch after Fix utilities.\nFATAL: RollBack required.')
-    
+        #from utils.FixRateAnalysis import FixRateAnalysis
+        #from utils.FixXYZ import FixXYZ
+        #
+        #print('Running FixRateAnalysis...')
+        #FixRateAnalysis(WorkDir)
+        #print('Done.\nRunning FixXYZ...')
+        #FixXYZ(WorkDir)
+        #print('Done.')
+        #
+        #RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
+        #RateAnalysisSize = len(RateAnalysis)
+    #
+        #if RateAnalysisSize != LatestFolder:
+        #    raise ValueError('RateAnalysis.csv entries still do not match Dir_VolSearch after Fix utilities.\nFATAL: RollBack required.')
+    #
 
 def main(WorkDir = None, TestCase = False):
     

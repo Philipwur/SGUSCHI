@@ -2,6 +2,10 @@ SGUSCHI is a fork of SLUSCHI for simulating an oxidation environment using the s
 
 ## To-Do
 
+Important, fix indexing checks on oxidationstep. len(RateAnalysis) should be one higher than current existing folder, because VolSearch_cont will create a new folder before oxidationstep is run.
++ VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
++ 
+
 PrepareWorkPlace
 + PrepareWorkPlace to check POTCAR, POSCAR, CovalentRadii to see that they all match
 +Prepareworkplace should run the first job so volsearch_cont works
