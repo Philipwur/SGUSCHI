@@ -1003,7 +1003,7 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
     try:    
         df = pd.read_csv(FilePath)
     except:
-        raise FileExistsError(f"RateAnalysis Does Not Exist at {FilePath}")
+        raise FileNotFoundError(f"RateAnalysis Does Not Exist at {FilePath}")
     
     if 'Gas Removed' in df.columns:
         df['Gas Removed'] = [

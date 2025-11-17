@@ -34,6 +34,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import ast
 import sys
 from typing import List  
 
@@ -109,7 +110,7 @@ def PrepareWorkingDirectory():
     LogLines = []
     LogLines.append("Working Directory Prepared Sucessfully")
 
-    Temperatures = eval(Params[RequiredKeys[0]])
+    Temperatures = ast.literal_eval(Params[RequiredKeys[0]])
     NSims = int(Params[RequiredKeys[1]])
     GasRatio = float(Params[RequiredKeys[2]])
     InitO2 = int(Params[RequiredKeys[3]])
