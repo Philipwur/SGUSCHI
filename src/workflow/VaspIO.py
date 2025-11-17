@@ -748,7 +748,7 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
 def WriteXYZ(
     OutcarData: Dict[str, Any],
     FilePath: Union[str, os.PathLike],
-    TailBytes: int = 2 * 1024 * 1024,
+    TailBytes: int = 2 * 1024 * 1024,  # Kept for backwards compatibility, but not used
     ExtendedXYZ: bool = True,
     CoordMode: str = "Cartesian",
     PbcTuple: Tuple[bool, bool, bool] = (True, True, True),
@@ -772,36 +772,25 @@ def WriteXYZ(
     if NumFrames == 0:
         return
 
-    # --- Append offsets (unchanged) ---
+    # --- Append offsets ---
     StepOffset = 0
     TimeOffset = 0.0
     FilePathStr = os.fspath(FilePath)
     AppendMode = os.path.exists(FilePathStr)
 
     if AppendMode:
+        # Efficiently read only the last frame's metadata
+        StepOffset, TimeOffset = _ReadLastFrameMetadata(FilePathStr)
+        
+        # Ensure file ends with newline
         try:
-            FileSize = os.path.getsize(FilePathStr)
-            with open(FilePathStr, "rb") as FileHandle:
-                SeekPos = max(0, FileSize - TailBytes)
-                FileHandle.seek(SeekPos)
-                TailBytesData = FileHandle.read()
-            TailText = TailBytesData.decode("utf-8", errors="ignore")
-
-            StepMatches = list(re.finditer(r"Step\s*=\s*(\d+)", TailText))
-            TimeMatches = list(re.finditer(r"Time\(fs\)\s*=\s*([-\d\.Ee+]+)", TailText))
-            if StepMatches:
-                StepOffset = int(StepMatches[-1].group(1))
-            if TimeMatches:
-                TimeOffset = float(TimeMatches[-1].group(1))
-
             with open(FilePathStr, "rb") as FileHandle:
                 FileHandle.seek(-1, os.SEEK_END)
                 if FileHandle.read(1) != b"\n":
                     with open(FilePathStr, "a", encoding="utf-8") as FileAppend:
                         FileAppend.write("\n")
         except Exception:
-            StepOffset = 0
-            TimeOffset = 0.0
+            pass
     else:
         os.makedirs(os.path.dirname(os.path.abspath(FilePathStr)) or ".", exist_ok=True)
 
@@ -863,8 +852,61 @@ def WriteXYZ(
             OutFile.write(f"{len(Elements)}\n")
             OutFile.write(CommentLine + "\n")
             for Element, (X, Y, Z) in zip(Elements, CoordsToWrite):
-                OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n") 
+                OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n")
 
+def _ReadLastFrameMetadata(FilePath: str, MaxLinesToRead: int = 1000) -> Tuple[int, float]:
+    """
+    Efficiently read the last frame's Step and Time from an XYZ file.
+    
+    Args:
+        FilePath: Path to the XYZ file
+        MaxLinesToRead: Maximum number of lines to read from end (safety limit)
+    
+    Returns:
+        Tuple of (StepOffset, TimeOffset)
+    """
+    StepOffset = 0
+    TimeOffset = 0.0
+    
+    try:
+        with open(FilePath, 'rb') as File:
+            # Go to end of file
+            File.seek(0, os.SEEK_END)
+            FileSize = File.tell()
+            
+            # Read backwards to find the last complete frame
+            BufferSize = min(FileSize, 8192)  # Read in 8KB chunks
+            File.seek(max(0, FileSize - BufferSize))
+            
+            Lines = File.read().decode('utf-8', errors='ignore').splitlines()
+            
+            # Search backwards through lines to find the last comment line
+            # (which is the second line of the last frame)
+            for i in range(len(Lines) - 1, -1, -1):
+                Line = Lines[i].strip()
+                
+                # Check if this is a comment line with metadata
+                if 'Step' in Line or 'Time' in Line or 'Lattice' in Line:
+                    # Try to extract Step
+                    StepMatch = re.search(r'Step\s*=\s*(\d+)', Line)
+                    if StepMatch:
+                        StepOffset = int(StepMatch.group(1))
+                    
+                    # Try to extract Time (handle both formats)
+                    TimeMatch = re.search(r'Time[_\(]fs[_\)]\s*=\s*([-\d\.Ee+]+)', Line)
+                    if TimeMatch:
+                        TimeOffset = float(TimeMatch.group(1))
+                    
+                    # If we found both, we're done
+                    if StepMatch or TimeMatch:
+                        break
+    
+    except Exception as E:
+        print(f"Warning: Could not read last frame metadata: {E}")
+        StepOffset = 0
+        TimeOffset = 0.0
+    
+    return StepOffset, TimeOffset
   
 def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
     """
