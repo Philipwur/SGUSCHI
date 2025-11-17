@@ -744,9 +744,11 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         "CellVectors": CellVectors,
     }
 
-def _ReadLastFrameMetadata(FilePath: str, MaxLinesToRead: int = 1000) -> Tuple[int, float]:
+def _ReadLastFrameMetadata(FilePath: str, ) -> Tuple[int, float]:
     """
     Efficiently read the last frame's Step and Time from an XYZ file.
+    
+    Helper function for writing/appending XYZ files during runtime.
     
     Args:
         FilePath: Path to the XYZ file
@@ -833,7 +835,18 @@ def WriteXYZ(
 
     if AppendMode:
         # Efficiently read only the last frame's metadata
-        StepOffset, TimeOffset = _ReadLastFrameMetadata(FilePathStr)
+        StepOffset, LastFrameTime = _ReadLastFrameMetadata(FilePathStr)
+        
+        # Calculate timestep from new data to avoid time duplication
+        if len(TimesFsList) >= 2:
+            Timestep = TimesFsList[1] - TimesFsList[0]
+        elif len(TimesFsList) == 1:
+            Timestep = 1.0  # Default timestep if only one frame
+        else:
+            Timestep = 0.0
+        
+        # Continue from after the last frame
+        TimeOffset = LastFrameTime + Timestep
         
         # Ensure file ends with newline
         try:
