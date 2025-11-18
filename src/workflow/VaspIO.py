@@ -744,62 +744,55 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         "CellVectors": CellVectors,
     }
 
+
 def _ReadLastFrameMetadata(FilePath: str) -> Tuple[int, float]:
     """
     Efficiently read the last frame's Step and Time from an XYZ file.
     Helper function for WriteXYZ to support appending without reading whole file.
-    
+
     Args:
         FilePath: Path to the XYZ file
-        MaxLinesToRead: Maximum number of lines to read from end (safety limit)
-    
+
     Returns:
         Tuple of (StepOffset, TimeOffset)
     """
     StepOffset = 0
     TimeOffset = 0.0
-    
+
     try:
-        with open(FilePath, 'rb') as File:
-            # Go to end of file
+        with open(FilePath, "rb") as File:
             File.seek(0, os.SEEK_END)
             FileSize = File.tell()
-            
-            # Read backwards to find the last complete frame
-            BufferSize = min(FileSize, 8192)  # Read in 8KB chunks
+
+            BufferSize = min(FileSize, 8192)
             File.seek(max(0, FileSize - BufferSize))
-            
-            Lines = File.read().decode('utf-8', errors='ignore').splitlines()
-            
-            # Search backwards through lines to find the last comment line
-            # (which is the second line of the last frame)
-            for i in range(len(Lines) - 1, -1, -1):
-                Line = Lines[i].strip()
-                
-                # Check if this is a comment line with metadata
-                if 'Step' in Line or 'Time' in Line or 'Lattice' in Line:
-                    # Try to extract Step
-                    StepMatch = re.search(r'Step\s*=\s*(\d+)', Line)
+
+            Lines = File.read().decode("utf-8", errors="ignore").splitlines()
+
+            for Index in range(len(Lines) - 1, -1, -1):
+                Line = Lines[Index].strip()
+
+                if "Step" in Line or "Time" in Line or "Lattice" in Line:
+                    StepMatch = re.search(r"Step\s*=\s*(\d+)", Line)
                     if StepMatch:
                         StepOffset = int(StepMatch.group(1))
-                    
-                    # Try to extract Time (handle both formats)
-                    # Format 1: Time_fs=80.000000
-                    # Format 2: Time(fs) = 80.000000
-                    TimeMatch = re.search(r'Time[_\(]fs[_\)]?\s*=\s*([-\d\.Ee+]+)', Line)
+
+                    # New format: Time = 80.000000
+                    TimeMatch = re.search(r"\bTime\s*=\s*([-\d\.Ee+]+)", Line)
                     if TimeMatch:
                         TimeOffset = float(TimeMatch.group(1))
-                    
-                    # If we found both, we're done
+
                     if StepMatch or TimeMatch:
                         break
-    
+
     except Exception as E:
         print(f"Warning: Could not read last frame metadata: {E}")
         StepOffset = 0
         TimeOffset = 0.0
-    
+
     return StepOffset, TimeOffset
+
+
 
 
 def WriteXYZ(
@@ -928,167 +921,6 @@ def WriteXYZ(
             for Element, (X, Y, Z) in zip(Elements, CoordsToWrite):
                 OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n")
 
-
-def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
-    """
-    Read an XYZ trajectory written by WriteXYZ() and return atomic and metadata information.
-
-    Args:
-        FilePath (str or Path):
-            Path to an XYZ file created by WriteXYZ().
-
-    Returns:
-        Dict[str, Any]:
-            {
-                "Positions": [pd.DataFrame],   # One per frame, columns ["Element","x","y","z"]
-                "Metadata":  pd.DataFrame,     # One row per frame:
-                                               # ["Step","Time","EFree","ETotal","Temperature","Pressure"]
-                "CellDim":   pd.DataFrame,     # Averaged lattice vectors, 3 rows × 3 columns ["x","y","z"]
-            }
-
-    Notes:
-        - The function accepts comment lines in any of the following time formats:
-            Time = <float>
-            Time=<float>
-            Timefs = <float>
-            Time_fs = <float>
-            Time(fs) = <float>
-          (matching what earlier versions produced as well as the current `Time` form).
-        - Also extracts Lattice information from both old and new XYZ formats.
-        - Averages the first and last lattice to create CellDim.
-        - Automatically handles both single-frame and multi-frame XYZ files.
-        - Skips malformed frames gracefully.
-    """
-
-    FilePathStr = os.fspath(FilePath)
-    if not os.path.exists(FilePathStr):
-        raise FileNotFoundError(f"XYZ file not found: {FilePathStr}")
-
-    PositionsList: List[pd.DataFrame] = []
-    MetadataRows: List[Dict[str, Any]] = []
-    LatticeList: List[np.ndarray] = []
-
-    with open(FilePathStr, "r", encoding="utf-8", errors="ignore") as File:
-        while True:
-            # --- Read number of atoms ---
-            Line = File.readline()
-            if not Line:
-                break  # EOF
-            Line = Line.strip()
-            if not Line:
-                continue
-            try:
-                NumAtoms = int(Line)
-            except ValueError:
-                # Skip malformed blocks
-                continue
-
-            # --- Read comment line ---
-            Comment = File.readline().strip()
-            Step = TimeFs = EFree = ETotal = Temperature = Pressure = np.nan
-
-            if Comment:
-                # Extract lattice information
-                LatticeMatch = re.search(r'Lattice="([^"]+)"', Comment)
-                if LatticeMatch:
-                    LatticeStr = LatticeMatch.group(1)
-                    try:
-                        LatticeValues = [float(X) for X in LatticeStr.split()]
-                        if len(LatticeValues) == 9:
-                            # Reshape to 3x3 matrix (row-major order)
-                            LatticeMatrix = np.array(LatticeValues).reshape(3, 3)
-                            LatticeList.append(LatticeMatrix)
-                    except (ValueError, AttributeError):
-                        pass
-
-                # Extract metadata via regex
-                StepMatch = re.search(r"Step\s*=\s*(\d+)", Comment)
-                # Accept Time, Timefs, Time_fs, Time(fs), case-insensitive
-                TimeMatch = re.search(
-                    r"\bTime(?:fs|_fs|\(fs\))?\s*=\s*([-\d\.Ee+]+)",
-                    Comment,
-                    re.IGNORECASE,
-                )
-                EFreeMatch = re.search(r"EFree[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
-                ETotalMatch = re.search(r"ETotal[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
-                TempMatch = re.search(
-                    r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-                PressMatch = re.search(
-                    r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-
-                if StepMatch:
-                    Step = int(StepMatch.group(1))
-                if TimeMatch:
-                    TimeFs = float(TimeMatch.group(1))
-                if EFreeMatch:
-                    EFree = float(EFreeMatch.group(1))
-                if ETotalMatch:
-                    ETotal = float(ETotalMatch.group(1))
-                if TempMatch:
-                    Temperature = float(TempMatch.group(1))
-                if PressMatch:
-                    Pressure = float(PressMatch.group(1))
-
-            MetadataRows.append({
-                "Step": Step,
-                "Time": TimeFs,
-                "EFree": EFree,
-                "ETotal": ETotal,
-                "Temperature": Temperature,
-                "Pressure": Pressure,
-            })
-
-            # --- Read atom block ---
-            Elements, X, Y, Z = [], [], [], []
-            for _ in range(NumAtoms):
-                Line = File.readline()
-                if not Line:
-                    break
-                Parts = Line.split()
-                if len(Parts) < 4:
-                    continue
-                Elements.append(Parts[0])
-                try:
-                    X.append(float(Parts[1]))
-                    Y.append(float(Parts[2]))
-                    Z.append(float(Parts[3]))
-                except ValueError:
-                    Elements.pop()  # malformed line
-
-            if Elements:
-                FrameDF = pd.DataFrame({
-                    "Element": Elements,
-                    "x": X,
-                    "y": Y,
-                    "z": Z,
-                })
-                PositionsList.append(FrameDF)
-
-    # --- Build metadata DataFrame ---
-    MetadataDF = pd.DataFrame(MetadataRows)
-
-    # --- Build CellDim DataFrame from averaged first and last lattice ---
-    CellDimDF = None
-    if LatticeList:
-        if len(LatticeList) == 1:
-            AveragedLattice = LatticeList[0]
-        else:
-            FirstLattice = LatticeList[0]
-            LastLattice = LatticeList[-1]
-            AveragedLattice = (FirstLattice + LastLattice) / 2.0
-
-        CellDimDF = pd.DataFrame(
-            AveragedLattice,
-            columns=["x", "y", "z"],
-        )
-
-    return {
-        "Positions": PositionsList,
-        "Metadata": MetadataDF,
-        "CellDim": CellDimDF,
-    }
 
 
   
@@ -1359,10 +1191,16 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
 
     return df
 
-#Testing OUTCAR Parser
+#Testing 
 #if __name__ == "__main__":
-    
-    #OUTCARData = OutcarParser(WorkDir="../Test/OUTCAR")
+#    
+#    XYZDataDirect = ReadXYZ('../DevArea/GraphsPaper1/XYZFiles/873K_1.xyz', 
+#                            ReturnCoordinatesType='Direct')
+#    print(XYZDataDirect['Positions'][0], '\n')
+#    
+#    XYZDataCartesian = ReadXYZ('../DevArea/GraphsPaper1/XYZFiles/873K_1.xyz', 
+#                               ReturnCoordinatesType='Cartesian')
+#    print(XYZDataCartesian['Positions'][0], '\n')
     
     #for Position in OUTCARData['Positions'][:1]:
     #    print(Position, '\n')
