@@ -801,6 +801,7 @@ def _ReadLastFrameMetadata(FilePath: str) -> Tuple[int, float]:
     
     return StepOffset, TimeOffset
 
+
 def WriteXYZ(
     OutcarData: Dict[str, Any],
     FilePath: Union[str, os.PathLike],
@@ -816,6 +817,9 @@ def WriteXYZ(
     - CoordMode="Direct"    → writes fractional (unitless).
     - ExtendedXYZ=True      → embed cell + properties in the comment line
                               (recognized by ASE/OVITO/etc.).
+
+    The time field is written as `Time=...` (ExtendedXYZ) or `Time = ...`
+    (plain XYZ), without embedding units in the key name. Time is given in fs.
     """
     # --- Unpack ---
     CellDF: pd.DataFrame = OutcarData["CellVectors"]
@@ -837,7 +841,7 @@ def WriteXYZ(
     if AppendMode:
         # Efficiently read only the last frame's metadata
         StepOffset, LastFrameTime = _ReadLastFrameMetadata(FilePathStr)
-        
+
         # Calculate timestep from new data
         if len(TimesFsList) >= 2:
             Timestep = TimesFsList[1] - TimesFsList[0]
@@ -845,15 +849,13 @@ def WriteXYZ(
             Timestep = 1.0  # Default timestep if only one frame
         else:
             Timestep = 0.0
-        
-        # Calculate offset so first new frame is at LastFrameTime + Timestep
-        # Formula: TimesFsList[0] + TimeOffset = LastFrameTime + Timestep
-        # Therefore: TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
+
+        # Offset so first new frame is at LastFrameTime + Timestep
         if len(TimesFsList) > 0:
             TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
         else:
             TimeOffset = LastFrameTime + Timestep
-        
+
         # Ensure file ends with newline
         try:
             with open(FilePathStr, "rb") as FileHandle:
@@ -905,7 +907,7 @@ def WriteXYZ(
                     f'{PropTag} '
                     f'pbc="{PbcStr}" '
                     f"Step={StepNumber} "
-                    f"Time_fs={TimeFs:.6f} "
+                    f"Time={TimeFs:.6f} "
                     f"EFree_eV={EFree:.6f} "
                     f"ETotal_eV={ETotal:.6f} "
                     f"Temperature_K={TemperatureK:.2f} "
@@ -914,7 +916,7 @@ def WriteXYZ(
             else:
                 CommentLine = (
                     f"Step = {StepNumber}  "
-                    f"Time(fs) = {TimeFs:.6f}  "
+                    f"Time = {TimeFs:.6f}  "
                     f"EFree = {EFree:.6f} eV  "
                     f"ETotal = {ETotal:.6f} eV  "
                     f"T = {TemperatureK:.2f} K  "
@@ -927,7 +929,6 @@ def WriteXYZ(
                 OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n")
 
 
-  
 def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
     """
     Read an XYZ trajectory written by WriteXYZ() and return atomic and metadata information.
@@ -941,16 +942,20 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
             {
                 "Positions": [pd.DataFrame],   # One per frame, columns ["Element","x","y","z"]
                 "Metadata":  pd.DataFrame,     # One row per frame:
-                                               # ["Step","TimeFs","EFree","ETotal","Temperature","Pressure"]
+                                               # ["Step","Time","EFree","ETotal","Temperature","Pressure"]
                 "CellDim":   pd.DataFrame,     # Averaged lattice vectors, 3 rows × 3 columns ["x","y","z"]
             }
 
     Notes:
-        - The function expects comment lines in the format used by WriteXYZ:
-            Step = <int>  Time(fs) = <float>  EFree = <float> eV  ETotal = <float> eV
-            T = <float> K  P = <float> kB
-        - Also extracts Lattice information from both old and new XYZ formats
-        - Averages the first and last lattice to create CellDim
+        - The function accepts comment lines in any of the following time formats:
+            Time = <float>
+            Time=<float>
+            Timefs = <float>
+            Time_fs = <float>
+            Time(fs) = <float>
+          (matching what earlier versions produced as well as the current `Time` form).
+        - Also extracts Lattice information from both old and new XYZ formats.
+        - Averages the first and last lattice to create CellDim.
         - Automatically handles both single-frame and multi-frame XYZ files.
         - Skips malformed frames gracefully.
     """
@@ -988,7 +993,7 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
                 if LatticeMatch:
                     LatticeStr = LatticeMatch.group(1)
                     try:
-                        LatticeValues = [float(x) for x in LatticeStr.split()]
+                        LatticeValues = [float(X) for X in LatticeStr.split()]
                         if len(LatticeValues) == 9:
                             # Reshape to 3x3 matrix (row-major order)
                             LatticeMatrix = np.array(LatticeValues).reshape(3, 3)
@@ -998,11 +1003,20 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
 
                 # Extract metadata via regex
                 StepMatch = re.search(r"Step\s*=\s*(\d+)", Comment)
-                TimeMatch = re.search(r"Time[_\(]fs[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                # Accept Time, Timefs, Time_fs, Time(fs), case-insensitive
+                TimeMatch = re.search(
+                    r"\bTime(?:fs|_fs|\(fs\))?\s*=\s*([-\d\.Ee+]+)",
+                    Comment,
+                    re.IGNORECASE,
+                )
                 EFreeMatch = re.search(r"EFree[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
                 ETotalMatch = re.search(r"ETotal[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
-                TempMatch = re.search(r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
-                PressMatch = re.search(r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment)
+                TempMatch = re.search(
+                    r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
+                PressMatch = re.search(
+                    r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
 
                 if StepMatch:
                     Step = int(StepMatch.group(1))
@@ -1048,7 +1062,7 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
                     "Element": Elements,
                     "x": X,
                     "y": Y,
-                    "z": Z
+                    "z": Z,
                 })
                 PositionsList.append(FrameDF)
 
@@ -1059,21 +1073,250 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
     CellDimDF = None
     if LatticeList:
         if len(LatticeList) == 1:
-            # Only one frame, use that lattice
             AveragedLattice = LatticeList[0]
         else:
-            # Average first and last lattice
             FirstLattice = LatticeList[0]
             LastLattice = LatticeList[-1]
             AveragedLattice = (FirstLattice + LastLattice) / 2.0
-        
+
         CellDimDF = pd.DataFrame(
             AveragedLattice,
-            columns=["x", "y", "z"]
+            columns=["x", "y", "z"],
         )
 
     return {
         "Positions": PositionsList,
+        "Metadata": MetadataDF,
+        "CellDim": CellDimDF,
+    }
+
+
+  
+def ReadXYZ(
+    FilePath: Union[str, os.PathLike],
+    ReturnCoordinatesType: str = "Direct",
+) -> Dict[str, Any]:
+    """
+    Read an XYZ trajectory written by WriteXYZ() and return atomic and metadata information.
+
+    Args:
+        FilePath (str or Path):
+            Path to an XYZ file created by WriteXYZ().
+        ReturnCoordinatesType (str):
+            Either "Cartesian" or "Direct" (default "Direct").
+            - The function auto-detects whether the stored coordinates are
+              Cartesian or Direct by inspecting the first frame:
+                * If any |x|, |y|, or |z| > 1.2 → treated as Cartesian.
+                * Otherwise → treated as Direct.
+            - It then converts to the requested ReturnCoordinatesType using
+              the per-frame lattice, if available.
+
+    Returns:
+        Dict[str, Any]:
+            {
+                "Positions": [pd.DataFrame],   # One per frame, columns ["Element","x","y","z"]
+                "Metadata":  pd.DataFrame,     # One row per frame:
+                                               # ["Step","Time","EFree","ETotal","Temperature","Pressure"]
+                "CellDim":   pd.DataFrame,     # Averaged lattice vectors, 3 rows × 3 columns ["x","y","z"],
+                                               # or None if no lattice found
+            }
+
+    Notes:
+        - The function accepts comment lines where time appears as any of:
+            Time = <float>
+            Time=<float>
+            Timefs = <float>
+            Time_fs = <float>
+            Time(fs) = <float>
+        - Lattice information is extracted from Lattice="..." in the comment
+          line, for any frame where it is present.
+        - For coordinate conversion, a lattice matrix is needed. If conversion
+          between Cartesian and Direct is requested but no lattice information
+          is available for one or more frames, a ValueError is raised.
+        - CellDim is built from the first and last lattice found (if any).
+        - Skips malformed frames gracefully.
+    """
+
+    ReturnTypeLower = ReturnCoordinatesType.lower()
+    if ReturnTypeLower not in ("cartesian", "direct"):
+        raise ValueError("ReturnCoordinatesType must be 'Cartesian' or 'Direct'.")
+
+    FilePathStr = os.fspath(FilePath)
+    if not os.path.exists(FilePathStr):
+        raise FileNotFoundError(f"XYZ file not found: {FilePathStr}")
+
+    PositionsList: List[pd.DataFrame] = []
+    MetadataRows: List[Dict[str, Any]] = []
+    FrameLattices: List[Optional[np.ndarray]] = []  # Lattice per frame with positions
+    AllLattices: List[np.ndarray] = []              # All lattices seen (for CellDim)
+
+    LastKnownLatticeMatrix: Optional[np.ndarray] = None
+
+    with open(FilePathStr, "r", encoding="utf-8", errors="ignore") as File:
+        while True:
+            # --- Read number of atoms ---
+            Line = File.readline()
+            if not Line:
+                break  # EOF
+            Line = Line.strip()
+            if not Line:
+                continue
+            try:
+                NumAtoms = int(Line)
+            except ValueError:
+                # Skip malformed blocks
+                continue
+
+            # --- Read comment line ---
+            Comment = File.readline().strip()
+            Step = TimeFs = EFree = ETotal = Temperature = Pressure = np.nan
+
+            CurrentFrameLatticeMatrix = LastKnownLatticeMatrix
+
+            if Comment:
+                # Extract lattice information
+                LatticeMatch = re.search(r'Lattice="([^"]+)"', Comment)
+                if LatticeMatch:
+                    LatticeStr = LatticeMatch.group(1)
+                    try:
+                        LatticeValues = [float(X) for X in LatticeStr.split()]
+                        if len(LatticeValues) == 9:
+                            LatticeMatrix = np.array(LatticeValues).reshape(3, 3)
+                            CurrentFrameLatticeMatrix = LatticeMatrix
+                            LastKnownLatticeMatrix = LatticeMatrix
+                            AllLattices.append(LatticeMatrix)
+                    except (ValueError, AttributeError):
+                        pass
+
+                # Extract metadata via regex
+                StepMatch = re.search(r"Step\s*=\s*(\d+)", Comment)
+                # Accept Time, Timefs, Time_fs, Time(fs), case-insensitive
+                TimeMatch = re.search(
+                    r"\bTime(?:fs|_fs|\(fs\))?\s*=\s*([-\d\.Ee+]+)",
+                    Comment,
+                    re.IGNORECASE,
+                )
+                EFreeMatch = re.search(
+                    r"EFree[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
+                ETotalMatch = re.search(
+                    r"ETotal[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
+                TempMatch = re.search(
+                    r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
+                PressMatch = re.search(
+                    r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
+                )
+
+                if StepMatch:
+                    Step = int(StepMatch.group(1))
+                if TimeMatch:
+                    TimeFs = float(TimeMatch.group(1))
+                if EFreeMatch:
+                    EFree = float(EFreeMatch.group(1))
+                if ETotalMatch:
+                    ETotal = float(ETotalMatch.group(1))
+                if TempMatch:
+                    Temperature = float(TempMatch.group(1))
+                if PressMatch:
+                    Pressure = float(PressMatch.group(1))
+
+            MetadataRows.append({
+                "Step": Step,
+                "Time": TimeFs,
+                "EFree": EFree,
+                "ETotal": ETotal,
+                "Temperature": Temperature,
+                "Pressure": Pressure,
+            })
+
+            # --- Read atom block ---
+            Elements, X, Y, Z = [], [], [], []
+            for _ in range(NumAtoms):
+                Line = File.readline()
+                if not Line:
+                    break
+                Parts = Line.split()
+                if len(Parts) < 4:
+                    continue
+                Elements.append(Parts[0])
+                try:
+                    X.append(float(Parts[1]))
+                    Y.append(float(Parts[2]))
+                    Z.append(float(Parts[3]))
+                except ValueError:
+                    Elements.pop()  # malformed line
+
+            if Elements:
+                FrameDF = pd.DataFrame({
+                    "Element": Elements,
+                    "x": X,
+                    "y": Y,
+                    "z": Z,
+                })
+                PositionsList.append(FrameDF)
+                FrameLattices.append(CurrentFrameLatticeMatrix)
+
+    # --- Build metadata DataFrame ---
+    MetadataDF = pd.DataFrame(MetadataRows)
+
+    # --- Build CellDim DataFrame from averaged first and last lattice ---
+    CellDimDF = None
+    if AllLattices:
+        if len(AllLattices) == 1:
+            AveragedLattice = AllLattices[0]
+        else:
+            FirstLattice = AllLattices[0]
+            LastLattice = AllLattices[-1]
+            AveragedLattice = (FirstLattice + LastLattice) / 2.0
+
+        CellDimDF = pd.DataFrame(
+            AveragedLattice,
+            columns=["x", "y", "z"],
+        )
+
+    # --- Auto-detect coordinate type from first frame ---
+    InputCoordinatesType = "direct"
+    if PositionsList:
+        FirstFrameCoords = PositionsList[0][["x", "y", "z"]].values
+        if FirstFrameCoords.size > 0:
+            MaxAbsCoord = float(np.max(np.abs(FirstFrameCoords)))
+            if MaxAbsCoord > 1.2:
+                InputCoordinatesType = "cartesian"
+
+    PositionsToReturn = PositionsList
+
+    # --- Convert to requested coordinate type if needed ---
+    if PositionsList and InputCoordinatesType != ReturnTypeLower:
+        # Need lattice information for every frame where we have positions
+        if any(LatticeMatrix is None for LatticeMatrix in FrameLattices):
+            raise ValueError(
+                "Cannot convert coordinates between Cartesian and Direct: "
+                "lattice information is missing for one or more frames."
+            )
+
+        ConvertedPositionsList: List[pd.DataFrame] = []
+
+        for FrameDF, LatticeMatrix in zip(PositionsList, FrameLattices):
+            CoordsArray = FrameDF[["x", "y", "z"]].values
+
+            if InputCoordinatesType == "direct" and ReturnTypeLower == "cartesian":
+                NewCoords = CoordsArray @ LatticeMatrix
+            elif InputCoordinatesType == "cartesian" and ReturnTypeLower == "direct":
+                LatticeInverse = np.linalg.inv(LatticeMatrix)
+                NewCoords = CoordsArray @ LatticeInverse
+            else:
+                NewCoords = CoordsArray
+
+            NewFrameDF = FrameDF.copy()
+            NewFrameDF[["x", "y", "z"]] = NewCoords
+            ConvertedPositionsList.append(NewFrameDF)
+
+        PositionsToReturn = ConvertedPositionsList
+
+    return {
+        "Positions": PositionsToReturn,
         "Metadata": MetadataDF,
         "CellDim": CellDimDF,
     }
