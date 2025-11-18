@@ -1019,7 +1019,7 @@ def ReadXYZ(FilePath: Union[str, os.PathLike]) -> Dict[str, Any]:
 
             MetadataRows.append({
                 "Step": Step,
-                "TimeFs": TimeFs,
+                "Time": TimeFs,
                 "EFree": EFree,
                 "ETotal": ETotal,
                 "Temperature": Temperature,
