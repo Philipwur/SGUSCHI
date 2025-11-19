@@ -2,19 +2,16 @@ SGUSCHI is a fork of SLUSCHI for simulating an oxidation environment using the s
 
 ## To-Do
 
-Test ReadRateAnalysis (are Gas species properly read into arrays?)
-Update WriteXYZ to return fractional coordinates and change TimeFs to Time (readable by ovito)
-
-Important, fix indexing checks on oxidationstep. len(RateAnalysis) should be one higher than current existing folder, because VolSearch_cont will create a new folder before oxidationstep is run.
+Important, fix indexing checks on oxidationstep. Current expecting to read print is correct. Make check more thorough somehow. 
 + VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
 
 PrepareWorkPlace
 + PrepareWorkPlace to check POTCAR, POSCAR, CovalentRadii to see that they all match
 +Prepareworkplace should run the first job so volsearch_cont works
 + PrepareWorkPlace to read job.in for job submission command
-+ PrepareWorkPlace to create template OxidationMaster
++ PrepareWorkPlace to create template OxidationMaster (see template)
 + PrepareWorkPlace should ensure INCAR nsw is set to 80
-+ make Md steps 10000000!
++ make job.in steps 10000000!
 
 Requirements.txt
 + Add it
