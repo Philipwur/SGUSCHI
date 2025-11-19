@@ -1168,10 +1168,7 @@ def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:
     """
     
     FilePath = Path(FilePath)
-    # Ensure the path points to RateAnalysis.csv (append/replace if needed)
-    if FilePath.name.lower() != "rateanalysis.csv":
-        FilePath = FilePath.with_name("RateAnalysis.csv") if FilePath.suffix else (FilePath / "RateAnalysis.csv")
-
+    
     try:    
         df = pd.read_csv(FilePath)
     except:
