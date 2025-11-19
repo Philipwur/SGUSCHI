@@ -1,4 +1,4 @@
-SGUSCHI is a fork of SLUSCHI for simulating an oxidation environment using the small-cell methodology.
+SGUSCHI is a fork of SLUSCHI for simulating a pure $O2$ oxidation environment using the small-cell methodology.
 
 Steps to install / run:
 1. Customise oxidation master
