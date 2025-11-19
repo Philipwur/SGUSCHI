@@ -1,8 +1,18 @@
 SGUSCHI is a fork of SLUSCHI for simulating an oxidation environment using the small-cell methodology.
 
+Steps to install / run:
+1. Customise oxidation master
+2. run make in sluschimod
+3. chmod +x * in sluschimod
+4. Add required files to a folder (list soon)
+5. Run PrepareWorkPlace.py in folder (if Dry run (currently only implemented)
+then run first job in each Dir_VolSearch folder)
+6. Customise OxidationMaster
+7. Submit OxidationMaster job. Resubmit it runs out. 
+
 ## To-Do
 
-Important, fix indexing checks on oxidationstep. Current expecting to read print is correct. Make check more thorough somehow. 
+Important, fix indexing checks on oxidationstep. Current 'expecting to read print' is correct. Make check more thorough somehow. 
 + VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
 
 PrepareWorkPlace
@@ -39,14 +49,3 @@ OxidationPreProcessing
 
 Testcases
 + Implement better test cases (3 cases, normal counting O2, adding an O2, Removing various gasses)
-
-
-Steps to install / run:
-1. Customise oxidation master
-2. run make in sluschimod
-3. chmod +x * in sluschimod
-4. Add required files to a folder (list soon)
-5. Run PrepareWorkPlace.py in folder (if Dry run (currently only implemented)
-then run first job in each Dir_VolSearch folder)
-6. Customise OxidationMaster
-7. Submit OxidationMaster to cluster
