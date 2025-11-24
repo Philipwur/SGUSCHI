@@ -14,6 +14,11 @@ then run first job in each Dir_VolSearch folder)
 
 Important, fix indexing checks on oxidationstep. Current 'expecting to read print' is correct. Make check more thorough somehow. 
 + VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
++ Look for error file (if job fails), restart job with a bit of extra time (keep track somehow, make new Python workflow for adding some extra time realtive to last attempted) and remove error file. Once this failed job is done, go back to originally given time.
+
+OxidationStep 
++ Create a better logging system in RootDir (some kind of table which gets updated)
+
 
 PrepareWorkPlace
 + PrepareWorkPlace to check POTCAR, POSCAR, CovalentRadii to see that they all match
@@ -22,6 +27,7 @@ PrepareWorkPlace
 + PrepareWorkPlace to create template OxidationMaster (see template)
 + PrepareWorkPlace should ensure INCAR nsw is set to 80
 + make job.in steps 10000000!
++ Add Error file if job fails in jobsub
 
 Requirements.txt
 + Add it
