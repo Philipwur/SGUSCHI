@@ -88,7 +88,7 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
             shutil.rmtree(FolderParam)
 
     # 4. Remove WAVECAR
-    # The existing WAVECAR likely belongs to a later step and will cause mismatches.
+    # The existing WAVECAR belongs to a later step and will cause mismatches.
     WavecarPath = WorkDir / 'WAVECAR'
     if WavecarPath.exists():
         print(f"Removing incompatible WAVECAR at {WavecarPath}...")
