@@ -55,7 +55,7 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
         raise FileNotFoundError(f"Target folder {TargetStep} does not exist in {WorkDir}.")
     
     # 2. Secure the POSCAR from the Next Step (TargetStep + 1)
-    # Since CONTCARs are not saved, 201/POSCAR represents the end of 200.
+    # Since CONTCARs are not saved, 201/POSCAR represents the end of 200. (post-oxidationstep)
     NextStep = TargetStep + 1
     SourcePoscar = WorkDir / str(NextStep) / 'POSCAR'
     DestPoscar = WorkDir / 'POSCAR'
