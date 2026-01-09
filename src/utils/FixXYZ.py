@@ -39,6 +39,7 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
         - Detects RootDir as two levels above WorkDir.
         - Determines TrajectoryName from the parent folder of WorkDir.
         - Collects all numbered subfolders (1, 2, 3, ...) in WorkDir.
+        - Safety Check: Verifies all folders contain POSCAR AND OUTCAR.
         - For each step folder, reads OUTCAR data via vio.OutcarParser.
         - Calls vio.WriteXYZ in ascending step order to reconstruct the XYZ.
         - Overwrites RootDir / 'xyz_files' / f'{TrajectoryName}.xyz'.
@@ -58,10 +59,6 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
     XYZDir.mkdir(parents=True, exist_ok=True)
     XYZPath = XYZDir / f"{TrajectoryName}.xyz"
 
-    # Remove any existing XYZ so we can rebuild from scratch
-    if XYZPath.exists():
-        XYZPath.unlink()
-
     # Collect numbered step folders
     StepFolders = sorted(
         int(Directory.name)
@@ -73,6 +70,29 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
         raise FileNotFoundError(
             f"No numbered step folders (e.g. '1', '2', ...) found in {WorkDir}"
         )
+
+    # --- SAFETY CHECK: Check for incomplete folders before deleting anything ---
+    IncompleteFolders = []
+    for Step in StepFolders:
+        StepPath = WorkDir / str(Step)
+        PoscarPath = StepPath / 'POSCAR'
+        OutcarPath = StepPath / 'OUTCAR'
+        
+        # Check both files
+        if (not PoscarPath.exists()) or (not OutcarPath.exists()):
+            IncompleteFolders.append(Step)
+
+    if IncompleteFolders:
+        print(f"\nError: Incomplete MD folders found (Steps: {IncompleteFolders}).")
+        print("Missing POSCAR or OUTCAR. Potential loss of data.")
+        print("Cancelling XYZ rebuild. Best solution is stitching new and old XYZ files together.\n")
+        sys.exit(1)
+    # -------------------------------------------------------------------------
+
+    # Remove any existing XYZ so we can rebuild from scratch
+    # Only done AFTER the safety check passed
+    if XYZPath.exists():
+        XYZPath.unlink()
 
     StepIterable = StepFolders
     if tqdm is not None:

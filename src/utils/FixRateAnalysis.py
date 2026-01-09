@@ -43,6 +43,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
 
     - Reads OxParams and CovalentRadii from the project RootDir.
     - Loops over all numbered subfolders in WorkDir (1, 2, 3, ...).
+    - Safety Check: Verifies all folders contain POSCAR AND OUTCAR.
     - For each folder, reads OUTCAR data via vio.OutcarParser.
     - Applies frame-wise exponential smoothing.
     - Recomputes O2 totals, cumulative O2 added, gas removal, gas fraction.
@@ -140,6 +141,23 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
         RateAnalysis.to_csv(RateAnalysisPathRoot, index=False)
 
         return RateAnalysis
+
+    # --- SAFETY CHECK: Check for incomplete folders before calculating anything ---
+    IncompleteFolders = []
+    for Step in StepFolders:
+        StepPath = WorkDir / str(Step)
+        PoscarPath = StepPath / 'POSCAR'
+        OutcarPath = StepPath / 'OUTCAR'
+
+        if (not PoscarPath.exists()) or (not OutcarPath.exists()):
+            IncompleteFolders.append(Step)
+
+    if IncompleteFolders:
+        print(f"\nError: Incomplete MD folders found (Steps: {IncompleteFolders}).")
+        print("Missing POSCAR or OUTCAR. Potential loss of data.")
+        print("Cancelling RateAnalysis rebuild. Best solution is stitching new and old RateAnalysis files together.\n")
+        sys.exit(1)
+    # --------------------------------------------------------------------
 
     # Decide whether to wrap with tqdm
     StepIterable = StepFolders
