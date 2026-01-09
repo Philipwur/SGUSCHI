@@ -91,11 +91,13 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
     # 5. Update Log (One folder above WorkDir)
     LogPath = WorkDir.parent / 'log.out'
     Timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LogMessage = f"[{Timestamp}] Simulation rolled back to end of step {TargetStep} (using geometry from {NextStep}).\n"
+    LogMessage = f"\n[{Timestamp}] Simulation rolled back to end of step {TargetStep} (using geometry from {NextStep}).\n"
     
     try:
         with open(LogPath, 'a') as f:
+            f.write('\n' + '-' * 80 + '\n')
             f.write(LogMessage)
+            f.write('\n' + '-' * 80 + '\n')
         print(f"Logged rollback to {LogPath}")
     except Exception as e:
         print(f"Warning: Could not write to log.out: {e}")
