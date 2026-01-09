@@ -288,7 +288,13 @@ def main(WorkDir = None, TestCase = False):
                                    MaximumComplexity = 3,
                                    ReturnBondMatrix = False)
         
-        O2Count = len(FrameGasses[FrameGasses['Molecule'] == ('O', 'O')].index)
+        # Explicitly handle empty dataframes and use .apply for safe tuple comparison
+        if FrameGasses is None or FrameGasses.empty:
+            O2Count = 0
+        else:
+            # .apply(lambda x: ...) avoids Pandas broadcasting errors when comparing tuples
+            IsO2 = FrameGasses['Molecule'].apply(lambda x: tuple(x) == ('O', 'O'))
+            O2Count = len(FrameGasses[IsO2].index)
     
         SmoothedO2Count = ExponentialSmoothing(O2Count, 
                                                SmoothedO2Count,
@@ -394,24 +400,6 @@ def main(WorkDir = None, TestCase = False):
             TestFile.write('\n')
             
         print('Test run complete.')
-    #First update RateAnalysis
-    
-    
-
-#def FixRateAnalysis(WorkDir):
-#    #Function that rewrites RateAnalysis if there have been issues in run
-#    #or rateanalysis.csv structure has been updated
-#    
-#    if os.path.exists(f'{WorkDir}/RateAnalysis.csv'):
-#        os.remove(f'{WorkDir}/RateAnalysis.csv')
-#    
-#    i = 1
-#    while True:
-#        if os.path.exists(f'{WorkDir}/{i}'):
-#            main(WorkDir, FreezePOSCAR = True)
-#            i += 1
-#        else:
-#            break
  
     
 if __name__ == '__main__':

@@ -12,6 +12,8 @@ then run first job in each Dir_VolSearch folder)
 
 ## To-Do
 
+Add TestCase to ReadMe
+
 Important, fix indexing checks on oxidationstep. Current 'expecting to read print' is correct. Make check more thorough somehow. 
 + VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
 + Look for error file (if job fails), restart job with a bit of extra time (keep track somehow, make new Python workflow for adding some extra time realtive to last attempted) and remove error file. Once this failed job is done, go back to originally given time.
