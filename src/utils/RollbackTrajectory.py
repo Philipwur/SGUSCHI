@@ -8,44 +8,35 @@ from typing import Union
 # Add 'src' to path so we can import from workflow and utils
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-# Import the provided utility scripts
-# Assumes FixXYZ.py and FixRateAnalysis.py are in the same package (src.utils)
 from utils.FixXYZ import FixXYZ
 from utils.FixRateAnalysis import FixRateAnalysis
-from workflow import VaspIO as vio
 
 '''
 -------------------------------------------------------------------------------
 How to use this script:
 
-From any given SGUSCHI working (Dir_VolSearch) directory you can run:
+From any given directory you can run:
 > python src/utils/RollbackTrajectory.py [TargetStep]
 > python src/utils/RollbackTrajectory.py [WorkDir] [TargetStep]
 
-Examples:
+Example:
 > python src/utils/RollbackTrajectory.py 200
-  (Rolls back current directory to step 200)
 
-> python src/utils/RollbackTrajectory.py /path/to/Dir_VolSearch 150
-  (Rolls back specified directory to step 150)
+Actions taken:
+1. TargetStep (200) is considered the LAST GOOD STEP.
+2. The script looks for the start of the NEXT step (201/POSCAR) to use as the 
+   continuation point (since 200/CONTCAR is not saved).
+3. 201/POSCAR is copied to WorkDir/POSCAR.
+4. All folders > 200 (e.g., 201, 202) are DELETED.
+5. WorkDir/WAVECAR is DELETED.
+6. RateAnalysis and XYZ files are repaired.
 
-This script:
-1. Deletes all step folders > TargetStep.
-2. Copies TargetStep/POSCAR to WorkDir/POSCAR (Resetting geometry).
-3. Updates log.out in the parent directory.
-4. Runs FixXYZ and FixRateAnalysis to clean up the data files.
+NOTE: If 201/POSCAR does not exist (e.g., 200 crashed before creating it),
+you must rollback to 199.
 -------------------------------------------------------------------------------
 '''
 
 def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) -> None:
-    """
-    Reverts the simulation state to a specific step.
-
-    Args:
-        WorkDir (Path): The working directory (Dir_VolSearch).
-        TargetStep (int): The step number to revert to. This folder will be KEPT,
-                          and its POSCAR will become the new starting point.
-    """
     
     if WorkDir is None:
         WorkDir = os.getcwd()
@@ -57,38 +48,50 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
     if not TargetFolder.exists():
         raise FileNotFoundError(f"Target folder {TargetStep} does not exist in {WorkDir}.")
     
-    # 2. Identify and Delete Future Folders
+    # 2. Secure the POSCAR from the Next Step (TargetStep + 1)
+    # Since CONTCARs are not saved, 201/POSCAR represents the end of 200.
+    NextStep = TargetStep + 1
+    SourcePoscar = WorkDir / str(NextStep) / 'POSCAR'
+    DestPoscar = WorkDir / 'POSCAR'
+    
+    if not SourcePoscar.exists():
+        print(f"\nCRITICAL ERROR: To rollback to folder {TargetStep}, the poscar from {NextStep} is required as new starting point.")
+        print(f"Please rollback further (e.g. to {TargetStep - 1}) or put a suitable poscar in folder {NextStep}.\n")
+        # Exit script safely without deleting anything
+        sys.exit(1)
+        
+    print(f"Securing geometry from {SourcePoscar} to {DestPoscar}...")
+    shutil.copy(SourcePoscar, DestPoscar)
+
+    # 3. Identify and Delete Future Folders
     StepFolders = [
         int(d.name) for d in WorkDir.iterdir() 
         if d.is_dir() and d.name.isdigit()
     ]
     
+    # We keep TargetStep, we delete everything strictly greater than it
     FoldersToRemove = [step for step in StepFolders if step > TargetStep]
     
     if not FoldersToRemove:
-        print(f"No folders found after step {TargetStep}. Nothing to delete.")
+        print(f"No folders found after step {TargetStep} to delete.")
     else:
-        print(f"Deleting {len(FoldersToRemove)} future folders...")
+        print(f"Deleting {len(FoldersToRemove)} future folders (Steps > {TargetStep})...")
         for step in sorted(FoldersToRemove):
             FolderParam = WorkDir / str(step)
             print(f"  - Removing {FolderParam}")
             shutil.rmtree(FolderParam)
 
-    # 3. Reset POSCAR
-    # "Uses its [TargetFolder] POSCAR as the starting point"
-    SourcePoscar = TargetFolder / 'POSCAR'
-    DestPoscar = WorkDir / 'POSCAR'
-    
-    if SourcePoscar.exists():
-        print(f"Resetting root POSCAR from {SourcePoscar}...")
-        shutil.copy(SourcePoscar, DestPoscar)
-    else:
-        raise FileNotFoundError(f"POSCAR not found in target folder {TargetFolder}. Cannot reset simulation.")
+    # 4. Remove WAVECAR
+    # The existing WAVECAR likely belongs to a later step and will cause mismatches.
+    WavecarPath = WorkDir / 'WAVECAR'
+    if WavecarPath.exists():
+        print(f"Removing incompatible WAVECAR at {WavecarPath}...")
+        os.remove(WavecarPath)
 
-    # 4. Update Log (One folder above WorkDir)
+    # 5. Update Log (One folder above WorkDir)
     LogPath = WorkDir.parent / 'log.out'
     Timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LogMessage = f"[{Timestamp}] Simulation rolled back to folder {TargetStep}.\n"
+    LogMessage = f"[{Timestamp}] Simulation rolled back to end of step {TargetStep} (using geometry from {NextStep}).\n"
     
     try:
         with open(LogPath, 'a') as f:
@@ -97,7 +100,7 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
     except Exception as e:
         print(f"Warning: Could not write to log.out: {e}")
 
-    # 5. Repair Data Files
+    # 6. Repair Data Files
     print("Running FixXYZ...")
     FixXYZ(WorkDir)
     
