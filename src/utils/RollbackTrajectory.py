@@ -31,8 +31,14 @@ Actions taken:
 5. WorkDir/WAVECAR is DELETED.
 6. RateAnalysis and XYZ files are repaired.
 
-NOTE: If 201/POSCAR does not exist (e.g., 200 crashed before creating it),
+Notes: 
+1. If 201/POSCAR does not exist (e.g., 200 crashed before creating it),
 you must rollback to 199.
+2. Since we use the next step's poscar, gasses which are added or removed in this 
+step won't show up in the rateanalysis since oxidation step has already adjusted
+its poscar in the failed simulation.
+To prevent this ensure you select a frame in which no gasses are added/removed 
+between folder n and n+1.
 -------------------------------------------------------------------------------
 '''
 
