@@ -1,4 +1,3 @@
-
 #%%
 # Primary Workflow for SGUSCHI. 
 # This Code runs every 80 MD steps.
@@ -18,7 +17,7 @@ from workflow import OxidationAnalysis as an
 
 
 def ExponentialSmoothing(f1: Union[float, int], f2: Union[float, int], 
-                         alpha: float = 0.001) -> float:
+                          alpha: float = 0.001) -> float:
     """
     Apply exponential smoothing between two scalar values.
 
@@ -174,7 +173,7 @@ def main(WorkDir = None, TestCase = False):
     Parameters:
         WorkDir (string): The location for Dir_Volsearch, where oxidation calculations are taking place
         TestCase (boolean): Option to run main without updating Files 
-                                
+                            
     """
     
     if WorkDir == None:
@@ -271,8 +270,8 @@ def main(WorkDir = None, TestCase = False):
         Gasses["Molecule"] = Gasses["Molecule"].apply(lambda M: tuple(M) if not isinstance(M, tuple) else M)
 
     Position, Velocity = an.RemoveNonO2Gasses(Position,
-                                              Velocity,
-                                              Gasses)
+                                                Velocity,
+                                                Gasses)
     
     O2Tol = O2Tol * GasFraction
     
@@ -316,7 +315,8 @@ def main(WorkDir = None, TestCase = False):
                                        ElementSymbol = 'O')
         
         #WAVECAR no longer good starting point for calculation
-        if os.path.exists(f'{WorkDir}/WAVECAR'):
+        #Only delete if this is NOT a test case
+        if not TestCase and os.path.exists(f'{WorkDir}/WAVECAR'):
             os.remove(f'{WorkDir}/WAVECAR')
             
         O2Count += 1
@@ -363,10 +363,37 @@ def main(WorkDir = None, TestCase = False):
         # Could come up with some solution to also include other outcar data 
         # but meh, we probably wont use it anyways.
         
-    # Prevents any creation of new files
+    # Prevents any creation of new files and dumps variables
     if TestCase:
         
-        print('Not Implemented yet')
+        TestOutPath = WorkDir / 'test.out'
+        print(f'Running in Test Mode. Writing variables to {TestOutPath}...')
+        
+        with open(TestOutPath, 'w') as TestFile:
+            TestFile.write(f'--- Test Run Output ---\n')
+            TestFile.write(f'WorkDir: {WorkDir}\n')
+            TestFile.write(f'LatestFolder (Step): {LatestFolder}\n')
+            TestFile.write(f'TrajectoryName: {TrajectoryName}\n\n')
+            
+            TestFile.write(f'--- Simulation Parameters ---\n')
+            TestFile.write(f'Temperature: {Temperature}\n')
+            TestFile.write(f'SimTime: {SimTime}\n')
+            TestFile.write(f'GasFraction: {GasFraction}\n\n')
+            
+            TestFile.write(f'--- Oxygen Analysis ---\n')
+            TestFile.write(f'SmoothedO2Count: {SmoothedO2Count}\n')
+            TestFile.write(f'O2Count (Actual): {O2Count}\n')
+            TestFile.write(f'O2Tol (Adjusted): {O2Tol}\n')
+            TestFile.write(f'O2Added (Bool): {O2Added}\n\n')
+            
+            TestFile.write(f'--- Gas Removal ---\n')
+            TestFile.write(f'GasRemovedStr: {GasRemovedStr}\n\n')
+            
+            TestFile.write(f'--- Pending DataFrame Update ---\n')
+            TestFile.write(NewRateRow.to_string(index=False))
+            TestFile.write('\n')
+            
+        print('Test run complete.')
     #First update RateAnalysis
     
     
@@ -390,7 +417,11 @@ def main(WorkDir = None, TestCase = False):
 if __name__ == '__main__':
     
     WorkDir = os.getcwd() #use in prod 
-    main(WorkDir)
+    
+    # Check for 'test' argument for file changes
+    TestMode = 'test' in [Arg.lower() for Arg in sys.argv]
+    
+    main(WorkDir, TestCase = TestMode)
     
     #Trial Fixing RateAnalysis
     #WorkDir = 'SLUSCHI_Oxidation_Test_25_1273K_10O_1/Dir_VolSearch' #use for demos     

@@ -45,7 +45,7 @@ def CalculateGasVolume(Position, CellDim):
 
     return GasVolume
 
-
+# Check where this is used, this doesn't seem done lol
 def CalculateScaleThickness(Position, CellDim, AtomicRadiusTol):
     BondMatrix = FindGases(Position, 
                            CellDim, 
