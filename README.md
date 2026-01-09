@@ -21,6 +21,24 @@ Important, fix indexing checks on oxidationstep. Current 'expecting to read prin
 OxidationStep 
 + Create a better logging system in RootDir (some kind of table which gets updated)
 
+SLUSCHI source
++ Add Hard stop to volsearch_cont if OxidationStep fails
+
+    Something like:
+
+    ```
+    ! 1. Declare a variable to hold the status
+    Integer :: PythonExitStatus
+    
+    ! 2. Replace your current call with this:
+    Call Execute_Line_Command("python NameOfScript.py", Wait=.True., Exitstat=PythonExitStatus)
+    
+    ! 3. Add the logic to stop the program
+    If (PythonExitStatus /= 0) Then
+        Write(*,*) "Error: Python script encountered a problem. Stopping Fortran."
+        Stop
+    End If
+    ```
 
 PrepareWorkPlace
 + PrepareWorkPlace to check POTCAR, POSCAR, CovalentRadii to see that they all match
