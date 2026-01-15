@@ -1,10 +1,7 @@
 #!/bin/csh
 
-# --- FIX 1: Define path immediately (Moved from line 12) ---
 set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
-
 #liquid?
-# --- FIX 2: Added $sluschipath/ prefix ---
 $sluschipath/getinfo.csh thmexp_liq job.in > /dev/null
 if ( $? == 0 ) then
   @ flag_liq = `$sluschipath/getinfo.csh thmexp_liq job.in`
@@ -13,15 +10,9 @@ else
 endif
 
 #only?
-# --- FIX 2: Added $sluschipath/ prefix ---
 set only = `$sluschipath/getinfo.csh thmexp_only job.in`
-
-# (Deleted the old 'set sluschipath' line from here)
-
-# --- FIX 2: Added $sluschipath/ prefix ---
 set vaspcmd = `$sluschipath/getinfo.csh vaspcmd job.in`
 set temp = `$sluschipath/getinfo.csh temp job.in`
-
 sed -i '/NBANDS/d' INCAR
 set sigma = `awk -v a="0.000086" -v b=$temp 'BEGIN{print (b*a)}'`
 
