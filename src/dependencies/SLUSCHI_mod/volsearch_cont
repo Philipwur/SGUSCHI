@@ -1,20 +1,30 @@
 #!/bin/csh
 
+# --- FIX 1: Define path immediately (Moved from line 12) ---
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+
 #liquid?
-getinfo.csh thmexp_liq job.in > /dev/null
+# --- FIX 2: Added $sluschipath/ prefix ---
+$sluschipath/getinfo.csh thmexp_liq job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_liq = `getinfo.csh thmexp_liq job.in`
+  @ flag_liq = `$sluschipath/getinfo.csh thmexp_liq job.in`
 else
   @ flag_liq = 0
 endif
-#only?
-set only = `getinfo.csh thmexp_only job.in`
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
-set vaspcmd = `getinfo.csh vaspcmd job.in`
-set temp = `getinfo.csh temp job.in`
+#only?
+# --- FIX 2: Added $sluschipath/ prefix ---
+set only = `$sluschipath/getinfo.csh thmexp_only job.in`
+
+# (Deleted the old 'set sluschipath' line from here)
+
+# --- FIX 2: Added $sluschipath/ prefix ---
+set vaspcmd = `$sluschipath/getinfo.csh vaspcmd job.in`
+set temp = `$sluschipath/getinfo.csh temp job.in`
+
 sed -i '/NBANDS/d' INCAR
 set sigma = `awk -v a="0.000086" -v b=$temp 'BEGIN{print (b*a)}'`
+
 #$sluschipath/UpdateINCAR PREC normal
 $sluschipath/UpdateINCAR SIGMA $sigma
 $sluschipath/UpdateINCAR TEBEG $temp 
@@ -28,6 +38,7 @@ while ( -d $nstep )
   @ nstep = $nstep + 1
 end
 echo === Continue running with JOB $nstep ===
+
 # initialize flags
 @ stopflag = 0
 @ count = 0
@@ -62,7 +73,8 @@ while ($stopflag == 0)
     echo $pressure_kinetic > pressure_kinetic.out
     grep 'volume of cell' OUTCAR | awk '{print $5}' >> volume.out
 
-    set pressure_target = `getinfo.csh press job.in`
+    # --- FIX 2: Added $sluschipath/ prefix ---
+    set pressure_target = `$sluschipath/getinfo.csh press job.in`
     echo $pressure_target  > pressure_target.out
     
     $sluschipath/PressureAvg.x 
@@ -86,8 +98,9 @@ while ($stopflag == 0)
     echo "$v2 \t $pxy $pyy $pyz"
     echo "$v3 \t $pxz $pyz $pzz"
 
-    set navg_pressure = `getinfo.csh navg job.in`
-    set factor_divide = `getinfo.csh factor job.in`
+    # --- FIX 2: Added $sluschipath/ prefix ---
+    set navg_pressure = `$sluschipath/getinfo.csh navg job.in`
+    set factor_divide = `$sluschipath/getinfo.csh factor job.in`
     echo $navg_pressure > param.in
     echo $factor_divide >> param.in
     $sluschipath/DetermineSize.x
@@ -99,7 +112,8 @@ while ($stopflag == 0)
     mkdir $nstep
     cp INCAR KPOINTS POSCAR OSZICAR $nstep
     @ NKPTS = `grep NKPTS OUTCAR | awk '{print $4}'`
-    @ gamma = `getinfo.csh gamma_possible job.in`
+    # --- FIX 2: Added $sluschipath/ prefix ---
+    @ gamma = `$sluschipath/getinfo.csh gamma_possible job.in`
     if ( $NKPTS == 1 && $gamma == 1 && -e ../jobsub_gamma ) then
       if ( $flag_gamma == 0 ) then
         cp IBZKPT KPOINTS
@@ -113,24 +127,26 @@ while ($stopflag == 0)
     mv OUTCAR $nstep
     touch OUTCAR
 
-    getinfo.csh thmexp_cnvg job.in > /dev/null
+    # --- FIX 2: Added $sluschipath/ prefix to ALL below ---
+    $sluschipath/getinfo.csh thmexp_cnvg job.in > /dev/null
     if ( $? == 0 ) then
-      getinfo.csh thmexp_cnvg job.in > thmexp.in
+      $sluschipath/getinfo.csh thmexp_cnvg job.in > thmexp.in
     else
       echo 20.0 > thmexp.in
     endif
-    getinfo.csh thmexp_max job.in > /dev/null
+    $sluschipath/getinfo.csh thmexp_max job.in > /dev/null
     if ( $? == 0 ) then
-      @ maxstep = `getinfo.csh thmexp_max job.in`
+      @ maxstep = `$sluschipath/getinfo.csh thmexp_max job.in`
     else
       @ maxstep = 5
     endif
-    getinfo.csh thmexp_min job.in > /dev/null
+    $sluschipath/getinfo.csh thmexp_min job.in > /dev/null
     if ( $? == 0 ) then
-      @ minstep = `getinfo.csh thmexp_min job.in`
+      @ minstep = `$sluschipath/getinfo.csh thmexp_min job.in`
     else
       @ minstep = 1
     endif
+    
     $sluschipath/VolSearchStop.x
     @ stopflag = `cat VolSearchStop.out`
     if ( -d $maxstep )  @ stopflag = 1
@@ -191,14 +207,16 @@ while ($stopflag == 0)
       endif
     else
       if ( $flag_liq == 1 && $nstep == 6 ) then
-        set temp = `getinfo.csh temp job.in`
+        set temp = `$sluschipath/getinfo.csh temp job.in` # (Fixed here too just in case)
         $sluschipath/UpdateINCAR TEBEG $temp
         $sluschipath/UpdateINCAR TEEND $temp
       endif
       head -2 CONTCAR > POSCAR
       cat lattice_predict.out >> POSCAR
       tail -n+6 CONTCAR >> POSCAR
+      
       python "$sluschipath/../../workflow/OxidationStep.py"
+      
       $vaspcmd jobsub >> jobsub.log
       set nstep = `expr $nstep + 1`
       echo Job $nstep submitted. Waiting for job $nstep to finish... 
