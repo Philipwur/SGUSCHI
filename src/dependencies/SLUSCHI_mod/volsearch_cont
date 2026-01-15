@@ -1,6 +1,7 @@
 #!/bin/csh
 
 set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+
 #liquid?
 $sluschipath/getinfo.csh thmexp_liq job.in > /dev/null
 if ( $? == 0 ) then
@@ -64,7 +65,7 @@ while ($stopflag == 0)
     echo $pressure_kinetic > pressure_kinetic.out
     grep 'volume of cell' OUTCAR | awk '{print $5}' >> volume.out
 
-    # --- FIX 2: Added $sluschipath/ prefix ---
+
     set pressure_target = `$sluschipath/getinfo.csh press job.in`
     echo $pressure_target  > pressure_target.out
     

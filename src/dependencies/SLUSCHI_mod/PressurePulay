@@ -1,6 +1,6 @@
 #!/bin/csh
 set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
-set vaspcmd = `getinfo.csh vaspcmd job.in`
+set vaspcmd = `$sluschipath/getinfo.csh vaspcmd job.in`
 
 if ( -d Dir_Pressure_Pulay ) rm -r Dir_Pressure_Pulay
 
