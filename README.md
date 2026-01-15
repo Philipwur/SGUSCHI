@@ -1,13 +1,14 @@
 SGUSCHI is a fork of SLUSCHI for simulating a pure $O2$ oxidation environment using the small-cell methodology.
 
-Steps to install / run:
-1. Customise oxidation master
+Steps to install / run
+1. Pull Directory
 2. run make in sluschimod
 3. chmod +x * in sluschimod
-4. Add required files to a folder (list soon)
+4. Add required files to a folder (INCAR, POTCAR, POSCAR (supercell), jobsub, job.in (SLUSCHI), KPOINTS, OxidationMaster (Soon will be done automatically), OxParams, CovalentRadii to folder)
 5. Run PrepareWorkPlace.py in folder (if Dry run (currently only implemented)
 then run first job in each Dir_VolSearch folder)
-6. Customise OxidationMaster
+5.5 Submit a sbatch jobsub in every Dir_VolSearch folder created
+6. Customise OxidationMaster. Wait for first wave of jobs to finish.
 7. Submit OxidationMaster job. Resubmit it runs out. 
 
 ## To-Do
@@ -20,6 +21,7 @@ Important, fix indexing checks on oxidationstep. Current 'expecting to read prin
 
 OxidationStep 
 + Create a better logging system in RootDir (some kind of table which gets updated)
++ Maybe also log CPU hours / GPU hours per job (make it optional in case job is not run on slurm)
 
 SLUSCHI source
 + Add Hard stop to volsearch_cont if OxidationStep fails
@@ -57,12 +59,11 @@ SLUSCHI_mod
 + make it such that volsearch_cont stops when OxidationStep raises an exception
 
 utils/Rollback.py
-+ create a function which rollsback simulation environment to last good folder (given by user or inferred ourselves (hard to do))
-+ To do this, copy the POSCAR from the first "bad step", delete the bad step folder (and WAVCAR, CHG* in workdir), run jobsub, then when finished run volsearch_cont
-+ POSCAR in bad folder is the end point of first good folder.
++ Change Rollback to use last step of outcar, so rollback can handle cases where 
+  gases were removed/added
 
 Misc.
-+ Finish re-doing compiling VASP apptainers
++ Re-do GPU container to include pmi2 so it can be spread across nodes.
 
 --low prio TODO--
 
@@ -73,5 +74,6 @@ OxidationPreProcessing
 + Add Supercell generation
 + Add SQS (Read Paper first)
 
-Testcases
-+ Implement better test cases (3 cases, normal counting O2, adding an O2, Removing various gasses)
+BUG:
+
+Outcar gets randomly removed sometimes. I think this is a sluschi thing
