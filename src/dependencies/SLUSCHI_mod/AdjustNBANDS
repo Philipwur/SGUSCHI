@@ -1,10 +1,10 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
-getinfo.csh adj_nbands job.in > /dev/null
+$sluschipath/getinfo.csh adj_nbands job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_adj = `getinfo.csh adj_nbands job.in`
+  @ flag_adj = `$sluschipath/getinfo.csh adj_nbands job.in`
 else
   @ flag_adj = 1
 endif
@@ -13,9 +13,9 @@ endif
 
 if ( $flag_adj == 1 ) then
 
-  getinfo.csh add_nbands job.in > /dev/null
+  $sluschipath/getinfo.csh add_nbands job.in > /dev/null
   if ( $? == 0 ) then
-    @ add_nbands = `getinfo.csh add_nbands job.in`
+    @ add_nbands = `$sluschipath/getinfo.csh add_nbands job.in`
   else
     @ add_nbands = 10
   endif
@@ -26,15 +26,6 @@ if ( $flag_adj == 1 ) then
   
     grep '^ *'$nbands'' OUTCAR | awk '{print $3}' > occupancy_states
   
-    #@ l0 = `cat occupancy_states | wc -l`
-    #@ l = 1
-    #while ( $l <= $l0 )
-    #  set a = `head -$l occupancy_states | tail -1`
-    #  if ( ! ($a == 0.00000) ) then
-    #    @ stop = 1
-    #  endif
-    #  @ l = $l + 1
-    #end
     set a = `cat occupancy_states | sort | tail -1`
     if ( ! ($a == 0.00000) ) then
       @ stop = 1

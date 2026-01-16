@@ -1,10 +1,10 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
-getinfo.csh adj_bmix job.in > /dev/null
+$sluschipath/getinfo.csh adj_bmix job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_adj = `getinfo.csh adj_bmix job.in`
+  @ flag_adj = `$sluschipath/getinfo.csh adj_bmix job.in`
 else
   @ flag_adj = 1
 endif

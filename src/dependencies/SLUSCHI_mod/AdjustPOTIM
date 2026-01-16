@@ -1,10 +1,11 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
-getinfo.csh adj_potim job.in > /dev/null
+# FIX 2: Add path prefix
+$sluschipath/getinfo.csh adj_potim job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_adj = `getinfo.csh adj_potim job.in`
+  @ flag_adj = `$sluschipath/getinfo.csh adj_potim job.in`
 else
   @ flag_adj = 1
 endif
@@ -19,9 +20,9 @@ endif
 @ nswd4 = `awk 'BEGIN{print ('$nsw'-'$nsw'$4)/4}'`
 if ( $flag_adj == 1 ) then
   # get tgt_nelm
-  getinfo.csh tgt_nelm job.in > /dev/null
+  $sluschipath/getinfo.csh tgt_nelm job.in > /dev/null
   if ( $? == 0 ) then
-    @ target = `getinfo.csh tgt_nelm job.in`
+    @ target = `$sluschipath/getinfo.csh tgt_nelm job.in`
   else
     @ target = 4
   endif

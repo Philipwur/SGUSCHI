@@ -1,6 +1,6 @@
 #!/bin/csh
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
-set vaspcmd = `getinfo.csh vaspcmd job.in`
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
+set vaspcmd = `$sluschipath/getinfo.csh vaspcmd job.in`
 
 if ( -d Dir_Converge ) rm -r Dir_Converge
 
@@ -35,7 +35,7 @@ cd ../high
 $sluschipath/UpdateINCAR PREC high
 sed -i '/ENCUT/d' INCAR
 # Generate KPOINTS file twice denser
-set kmesh = `getinfo.csh kmesh ../../job.in`
+set kmesh = `$sluschipath/getinfo.csh kmesh ../../job.in`
 @ kmesh = $kmesh + $kmesh
 cat - << EOF > KPOINTS
 KPOINTS by SLUSCHI
