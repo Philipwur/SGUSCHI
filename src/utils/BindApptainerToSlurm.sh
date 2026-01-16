@@ -22,6 +22,8 @@
 #      usernames might appear as UIDs (e.g., 1001 instead of 'user'), but functionality works.
 #   3. Portability: While dynamic, extremely non-standard custom Slurm installs 
 #      might require manual tweaks to the search paths.
+#
+# Useful if you want to run SGUCHI with an apptainer on a slurm cluster
 # ==================================================================================
 
 bind_apptainer_to_slurm() {
