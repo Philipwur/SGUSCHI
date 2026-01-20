@@ -17,7 +17,7 @@ echo $potim > anal/history/potim
 endif
 @ nsw = `grep POSI OUTCAR | grep -v ML | wc -l`
 @ nswd2 = `awk 'BEGIN{print ('$nsw'-'$nsw'%2)/2}'`
-@ nswd4 = `awk 'BEGIN{print ('$nsw'-'$nsw'$4)/4}'`
+@ nswd4 = `awk 'BEGIN{print ('$nsw'-'$nsw'%4)/4}'`
 if ( $flag_adj == 1 ) then
   # get tgt_nelm
   $sluschipath/getinfo.csh tgt_nelm job.in > /dev/null
