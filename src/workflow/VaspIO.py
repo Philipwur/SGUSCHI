@@ -745,185 +745,36 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
     }
 
 
-def _ReadLastFrameMetadata(FilePath: str) -> Tuple[int, float]:
+
+def _ReadLastFrameMetadata(FilePath: str, ReadSize: int = 1024 * 1024) -> Tuple[int, float]:
     """
-    Efficiently read the last frame's Step and Time from an XYZ file.
-    Helper function for WriteXYZ to support appending without reading whole file.
-
-    Args:
-        FilePath: Path to the XYZ file
-
-    Returns:
-        Tuple of (StepOffset, TimeOffset)
+    Scans the end of the file to find the last recorded Step and Time.
+    With 150 atoms/frame, 1MB covers ~200 frames, so this is safe and fast.
     """
-    StepOffset = 0
-    TimeOffset = 0.0
+    if not os.path.exists(FilePath) or os.path.getsize(FilePath) == 0:
+        return 0, 0.0
 
-    try:
-        with open(FilePath, "rb") as File:
-            File.seek(0, os.SEEK_END)
-            FileSize = File.tell()
+    LastStep = 0
+    LastTime = 0.0
+    
+    with open(FilePath, "rb") as FileHandle:
+        FileHandle.seek(0, os.SEEK_END)
+        FileSize = FileHandle.tell()
+        SeekPos = max(0, FileSize - ReadSize)
+        FileHandle.seek(SeekPos)
+        
+        TailData = FileHandle.read().decode("utf-8", errors="ignore")
+        
+        StepMatches = re.findall(r"Step\s*=\s*(\d+)", TailData)
+        TimeMatches = re.findall(r"Time(?:fs|_fs)?\s*=\s*([-\d\.Ee+]+)", TailData, re.IGNORECASE)
 
-            BufferSize = min(FileSize, 8192)
-            File.seek(max(0, FileSize - BufferSize))
+        if StepMatches:
+            LastStep = int(StepMatches[-1])
+        if TimeMatches:
+            LastTime = float(TimeMatches[-1])
 
-            Lines = File.read().decode("utf-8", errors="ignore").splitlines()
+    return LastStep, LastTime
 
-            for Index in range(len(Lines) - 1, -1, -1):
-                Line = Lines[Index].strip()
-
-                if "Step" in Line or "Time" in Line or "Lattice" in Line:
-                    StepMatch = re.search(r"Step\s*=\s*(\d+)", Line)
-                    if StepMatch:
-                        StepOffset = int(StepMatch.group(1))
-
-                    # New format: Time = 80.000000
-                    TimeMatch = re.search(r"\bTime\s*=\s*([-\d\.Ee+]+)", Line)
-                    if TimeMatch:
-                        TimeOffset = float(TimeMatch.group(1))
-
-                    if StepMatch or TimeMatch:
-                        break
-
-    except Exception as E:
-        print(f"Warning: Could not read last frame metadata: {E}")
-        StepOffset = 0
-        TimeOffset = 0.0
-
-    return StepOffset, TimeOffset
-
-
-
-
-def WriteXYZ(
-    OutcarData: Dict[str, Any],
-    FilePath: Union[str, os.PathLike],
-    TailBytes: int = 2 * 1024 * 1024,  # Kept for backwards compatibility, but not used
-    ExtendedXYZ: bool = True,
-    CoordMode: str = "Cartesian",
-    PbcTuple: Tuple[bool, bool, bool] = (True, True, True),
-) -> None:
-    """
-    Write or append trajectory frames to XYZ.
-
-    - CoordMode="Cartesian" → writes Å (default).
-    - CoordMode="Direct"    → writes fractional (unitless).
-    - ExtendedXYZ=True      → embed cell + properties in the comment line
-                              (recognized by ASE/OVITO/etc.).
-
-    The time field is written as `Time=...` (ExtendedXYZ) or `Time = ...`
-    (plain XYZ), without embedding units in the key name. Time is given in fs.
-    """
-    # --- Unpack ---
-    CellDF: pd.DataFrame = OutcarData["CellVectors"]
-    CellMatrix = CellDF[["x", "y", "z"]].values  # shape (3,3)
-    PositionsList: List[pd.DataFrame] = OutcarData["Positions"]
-    EnergiesDF: pd.DataFrame = OutcarData["Energies"]
-    TimesFsList: List[float] = OutcarData["TimesFs"]
-
-    NumFrames = min(len(PositionsList), len(TimesFsList), len(EnergiesDF))
-    if NumFrames == 0:
-        return
-
-    # --- Append offsets ---
-    StepOffset = 0
-    TimeOffset = 0.0
-    FilePathStr = os.fspath(FilePath)
-    AppendMode = os.path.exists(FilePathStr)
-
-    if AppendMode:
-        # Efficiently read only the last frame's metadata
-        StepOffset, LastFrameTime = _ReadLastFrameMetadata(FilePathStr)
-
-        # Calculate timestep from new data
-        if len(TimesFsList) >= 2:
-            Timestep = TimesFsList[1] - TimesFsList[0]
-        elif len(TimesFsList) == 1:
-            Timestep = 1.0  # Default timestep if only one frame
-        else:
-            Timestep = 0.0
-
-        # Offset so first new frame is at LastFrameTime + Timestep
-        if len(TimesFsList) > 0:
-            TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
-        else:
-            TimeOffset = LastFrameTime + Timestep
-
-        # Ensure file ends with newline
-        try:
-            with open(FilePathStr, "rb") as FileHandle:
-                FileHandle.seek(-1, os.SEEK_END)
-                if FileHandle.read(1) != b"\n":
-                    with open(FilePathStr, "a", encoding="utf-8") as FileAppend:
-                        FileAppend.write("\n")
-        except Exception:
-            pass
-    else:
-        os.makedirs(os.path.dirname(os.path.abspath(FilePathStr)) or ".", exist_ok=True)
-
-    # --- Build Extended XYZ header pieces ---
-    LatticeFlat = [float(X) for Row in CellMatrix for X in Row]  # row-major a,b,c
-    LatticeStr = " ".join(f"{V:.10f}" for V in LatticeFlat)
-    PbcStr = " ".join("T" if B else "F" for B in PbcTuple)
-
-    # Property tag depends on coord mode
-    if CoordMode.lower() == "direct":
-        PropTag = "Properties=species:S:1:frac:R:3"
-    else:
-        PropTag = "Properties=species:S:1:pos:R:3"
-
-    # --- Write frames ---
-    Mode = "a" if AppendMode else "w"
-    with open(FilePathStr, Mode, encoding="utf-8") as OutFile:
-        for FrameIndex in range(NumFrames):
-            PositionFrac = PositionsList[FrameIndex]
-            Elements = PositionFrac["Element"].tolist()
-            FracArray = PositionFrac[["x", "y", "z"]].values
-
-            if CoordMode.lower() == "direct":
-                CoordsToWrite = FracArray  # unitless
-            else:
-                CoordsToWrite = FracArray @ CellMatrix  # Å
-
-            EnergyRow = EnergiesDF.iloc[FrameIndex]
-            StepNumber = int(EnergyRow.get("Step", FrameIndex + 1)) + StepOffset
-            TimeFs = float(TimesFsList[FrameIndex]) + TimeOffset
-            EFree = float(EnergyRow.get("EFree", np.nan))
-            ETotal = float(EnergyRow.get("ETotal", np.nan))
-            TemperatureK = float(EnergyRow.get("Temperature", np.nan))
-            PressureKB = float(EnergyRow.get("Pressure", np.nan))
-
-            # Comment line
-            if ExtendedXYZ:
-                CommentLine = (
-                    f'Lattice="{LatticeStr}" '
-                    f'{PropTag} '
-                    f'pbc="{PbcStr}" '
-                    f"Step={StepNumber} "
-                    f"Time={TimeFs:.6f} "
-                    f"EFree_eV={EFree:.6f} "
-                    f"ETotal_eV={ETotal:.6f} "
-                    f"Temperature_K={TemperatureK:.2f} "
-                    f"Pressure_kB={PressureKB:.3f}"
-                )
-            else:
-                CommentLine = (
-                    f"Step = {StepNumber}  "
-                    f"Time = {TimeFs:.6f}  "
-                    f"EFree = {EFree:.6f} eV  "
-                    f"ETotal = {ETotal:.6f} eV  "
-                    f"T = {TemperatureK:.2f} K  "
-                    f"P = {PressureKB:.3f} kB"
-                )
-
-            OutFile.write(f"{len(Elements)}\n")
-            OutFile.write(CommentLine + "\n")
-            for Element, (X, Y, Z) in zip(Elements, CoordsToWrite):
-                OutFile.write(f"{Element:2s}  {X:12.6f}  {Y:12.6f}  {Z:12.6f}\n")
-
-
-
-  
 def ReadXYZ(
     FilePath: Union[str, os.PathLike],
     ReturnCoordinatesType: str = "Direct",
@@ -1152,6 +1003,144 @@ def ReadXYZ(
         "Metadata": MetadataDF,
         "CellDim": CellDimDF,
     }
+
+def WriteXYZ(
+    OutcarData: Dict[str, Any],
+    FilePath: Union[str, os.PathLike],
+    TailBytes: int = 1024 * 1024, 
+    ExtendedXYZ: bool = True,
+    CoordMode: str = "Cartesian",
+    PbcTuple: Tuple[bool, bool, bool] = (True, True, True),
+    Precision: int = 9,
+) -> None:
+    """
+    Optimized for High Frame Count.
+    """
+    # --- Unpack ---
+    CellDF: pd.DataFrame = OutcarData["CellVectors"]
+    CellMatrix = CellDF[["x", "y", "z"]].values  # shape (3,3)
+    PositionsList: List[pd.DataFrame] = OutcarData["Positions"]
+    EnergiesDF: pd.DataFrame = OutcarData["Energies"]
+    TimesFsList: List[float] = OutcarData["TimesFs"]
+
+    NumFrames = min(len(PositionsList), len(TimesFsList), len(EnergiesDF))
+    if NumFrames == 0:
+        return
+
+    # --- Append offsets ---
+    StepOffset = 0
+    TimeOffset = 0.0
+    FilePathStr = os.fspath(FilePath)
+    AppendMode = os.path.exists(FilePathStr)
+
+    if AppendMode:
+        StepOffset, LastFrameTime = _ReadLastFrameMetadata(FilePathStr, ReadSize=TailBytes)
+
+        if len(TimesFsList) >= 2:
+            Timestep = TimesFsList[1] - TimesFsList[0]
+        elif len(TimesFsList) == 1:
+            Timestep = 1.0
+        else:
+            Timestep = 0.0
+
+        if len(TimesFsList) > 0:
+            TimeOffset = LastFrameTime + Timestep - TimesFsList[0]
+        else:
+            TimeOffset = LastFrameTime + Timestep
+
+        try:
+            with open(FilePathStr, "rb") as FileHandle:
+                FileHandle.seek(-1, os.SEEK_END)
+                if FileHandle.read(1) != b"\n":
+                    with open(FilePathStr, "a", encoding="utf-8") as FileAppend:
+                        FileAppend.write("\n")
+        except Exception:
+            pass
+    else:
+        os.makedirs(os.path.dirname(os.path.abspath(FilePathStr)) or ".", exist_ok=True)
+
+    # --- Build Header Pieces ---
+    FloatFmt = f"{{:.{Precision}f}}"
+    LatticeFlat = [float(X) for Row in CellMatrix for X in Row]
+    LatticeStr = " ".join(FloatFmt.format(V) for V in LatticeFlat)
+    PbcStr = " ".join("T" if B else "F" for B in PbcTuple)
+
+    if CoordMode.lower() == "direct":
+        PropTag = "Properties=species:S:1:frac:R:3"
+    else:
+        PropTag = "Properties=species:S:1:pos:R:3"
+
+    # --- Pre-calculation for Speed ---
+    # 1. Convert Energies to dict list (fast access)
+    EnergiesDictList = EnergiesDF.to_dict("records")
+    
+    # 2. Pre-compile coordinate format string (Python string formatting is faster than Pandas for small N)
+    # Width = Precision + 6 (padding for sign, dot, and ~3 integer digits)
+    CWidth = Precision + 6
+    AtomLineFmt = f"{{:<2s}} {{:>{CWidth}.{Precision}f}} {{:>{CWidth}.{Precision}f}} {{:>{CWidth}.{Precision}f}}\n"
+
+    Mode = "a" if AppendMode else "w"
+
+    with open(FilePathStr, Mode, encoding="utf-8") as OutFile:
+        for FrameIndex in range(NumFrames):
+            # --- Data Access ---
+            PositionFrac = PositionsList[FrameIndex]
+            
+            # Using .values is faster than .tolist() for coordinates
+            Elements = PositionFrac["Element"].values  
+            FracArray = PositionFrac[["x", "y", "z"]].values
+
+            if CoordMode.lower() == "direct":
+                CoordsToWrite = FracArray
+            else:
+                CoordsToWrite = FracArray @ CellMatrix
+
+            EnergyRow = EnergiesDictList[FrameIndex]
+            StepNumber = int(EnergyRow.get("Step", FrameIndex + 1)) + StepOffset
+            TimeFs = float(TimesFsList[FrameIndex]) + TimeOffset
+
+            # --- Extract Physics Data (Robust) ---
+            EFree = float(EnergyRow.get("EFree", np.nan))
+            ETotal = float(EnergyRow.get("ETotal", np.nan))
+            TemperatureK = float(EnergyRow.get("Temperature", np.nan))
+            PressureKB = float(EnergyRow.get("Pressure", np.nan))
+
+            # --- Construct Header ---
+            if ExtendedXYZ:
+                # We build the list directly to avoid Dict overhead
+                CommentParts = [
+                    f'Lattice="{LatticeStr}"',
+                    PropTag,
+                    f'pbc="{PbcStr}"'
+                ]
+                
+                if not np.isnan(TimeFs): CommentParts.append(f'Time={FloatFmt.format(TimeFs)}')
+                if not np.isnan(StepNumber): CommentParts.append(f'Step={StepNumber}')
+                if not np.isnan(EFree): CommentParts.append(f'EFree_eV={FloatFmt.format(EFree)}')
+                if not np.isnan(ETotal): CommentParts.append(f'ETotal_eV={FloatFmt.format(ETotal)}')
+                if not np.isnan(TemperatureK): CommentParts.append(f'Temperature_K={TemperatureK:.2f}')
+                if not np.isnan(PressureKB): CommentParts.append(f'Pressure_kB={PressureKB:.3f}')
+                
+                CommentLine = " ".join(CommentParts)
+            else:
+                Parts = [f"Step = {StepNumber}"]
+                if not np.isnan(TimeFs): Parts.append(f"Time = {FloatFmt.format(TimeFs)}")
+                if not np.isnan(EFree): Parts.append(f"EFree = {FloatFmt.format(EFree)} eV")
+                if not np.isnan(ETotal): Parts.append(f"ETotal = {FloatFmt.format(ETotal)} eV")
+                CommentLine = "  ".join(Parts)
+
+            # --- Write Block ---
+            # For 150 atoms, a list comprehension join is extremely fast 
+            # and avoids the heavy overhead of creating a new DataFrame per frame.
+            AtomLines = [
+                AtomLineFmt.format(El, X, Y, Z) 
+                for El, (X, Y, Z) in zip(Elements, CoordsToWrite)
+            ]
+            
+            OutFile.write(f"{len(Elements)}\n")
+            OutFile.write(CommentLine + "\n")
+            OutFile.write("".join(AtomLines))
+
     
 
 def ReadRateAnalysis(FilePath: Union[str, Path]) -> pd.DataFrame:

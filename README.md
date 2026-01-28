@@ -13,7 +13,12 @@ then run first job in each Dir_VolSearch folder)
 
 ## To-Do
 
+! HIGH PRIO
+> Create manual management of O,Zr,C tracking to not accidentalyl add C to gas phase (what happened in daic)
+
 Add TestCase to ReadMe
+
+Add Pressure method to postprocessing from Devarea.
 
 Important, fix indexing checks on oxidationstep. Current 'expecting to read print' is correct. Make check more thorough somehow. 
 + VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
