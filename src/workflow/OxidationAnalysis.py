@@ -25,26 +25,6 @@ def ConvertCartesianToDirect(Position: pd.DataFrame, CellDim: pd.DataFrame) -> p
     return Position
 
 
-def CalculateGasVolume(Position, CellDim):
-    
-    '''
-    Calculates the volume of the oxidising gas by taking the distance between two 
-    outward Zr atoms.
-    '''
-
-    PositionZrX = Position['x'].loc[Position['Element'] == 'Zr']        
-    PositionZrX = PositionZrX.sort_values()
-    
-    XDistances = PositionZrX - PositionZrX.shift(1)
-    XDistances.iloc[0] =  1 - (PositionZrX.iloc[-1] + PositionZrX.iloc[0])
-    
-    GasWidth = XDistances.max() * np.linalg.norm(CellDim['x'])
-    SurfaceArea = np.linalg.norm(np.cross(CellDim['y'], CellDim['z']))
-    
-    GasVolume = GasWidth * SurfaceArea * 10 ** -30
-
-    return GasVolume
-
 # Check where this is used, this doesn't seem done lol
 def CalculateScaleThickness(Position, CellDim, AtomicRadiusTol):
     BondMatrix = FindGases(Position, 
