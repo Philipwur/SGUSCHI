@@ -385,8 +385,8 @@ def WritePoscar(
     if not {"x", "y", "z"}.issubset(CellDim.columns) or len(CellDim) != 3:
         raise ValueError("CellDim must be a 3×3 DataFrame with columns ['x','y','z'].")
 
-    AtomCounts = Position["Element"].value_counts(sort=False)
-    ElementOrder = list(AtomCounts.index)
+    ElementOrder = list(dict.fromkeys(Position["Element"]))
+    AtomCounts = {E: int((Position["Element"] == E).sum()) for E in ElementOrder}
 
     with open(FilePath, "w", encoding="utf-8") as F:
         F.write("%s\n" % Title)
