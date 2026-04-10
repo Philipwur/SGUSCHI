@@ -27,6 +27,7 @@ Important, fix indexing checks on oxidationstep. Current 'expecting to read prin
 OxidationStep 
 + Create a better logging system in RootDir (some kind of table which gets updated)
 + Maybe also log CPU hours / GPU hours per job (make it optional in case job is not run on slurm)
++ Add check for radii, POTCAR, POSCAR cohesion (this can only work if runtime is vasp)
 
 SLUSCHI source
 + Add Hard stop to volsearch_cont if OxidationStep fails
@@ -66,6 +67,8 @@ SLUSCHI_mod
 utils/Rollback.py
 + Change Rollback to use last step of outcar, so rollback can handle cases where 
   gases were removed/added
+
+
 
 Misc.
 + Re-do GPU container to include pmi2 so it can be spread across nodes.
