@@ -69,6 +69,7 @@ def CalculateOxidationRate(N, t, CellDim, PartialPressure,
         UpperBound = ChiSquaredUpperBound / (2 * t)
         LowerBound *= OxidationRateConversion
         UpperBound *= OxidationRateConversion
+        
         return (OxRate, LowerBound, UpperBound)
 
 
