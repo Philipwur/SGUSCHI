@@ -35,7 +35,7 @@ class SimulationRow:
     Folders: str
     Latest: str
     RateRows: str
-    SimTime_fs: str
+    SimTime_ps: str
     TotalO2Added: str
     MoleculesRemoved: str
     WallTime: str
@@ -50,7 +50,7 @@ SUMMARY_HEADERS = (
     "Folders",
     "Latest",
     "RateRows",
-    "SimTime_fs",
+    "SimTime_ps",
     "TotalO2Added",
     "MoleculesRemoved",
     "WallTime",
@@ -191,7 +191,7 @@ def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str, str, str]:
     for Key in ("Time (fs)", "Time", "Time_fs"):
         Raw = Rows[-1].get(Key)
         if Raw not in (None, ""):
-            TimeValue = FormatFloat(Raw)
+            TimeValue = FormatPicoseconds(Raw)
             break
 
     TotalO2Added = "-"
@@ -236,6 +236,17 @@ def FormatFloat(Value: str) -> str:
     if Number.is_integer():
         return str(int(Number))
     return f"{Number:.3f}".rstrip("0").rstrip(".")
+
+
+def FormatPicoseconds(Value: str) -> str:
+    """Convert a femtosecond string to compact picoseconds text."""
+    try:
+        Number = float(Value) / 1000.0
+    except (TypeError, ValueError):
+        return str(Value)
+    if Number.is_integer():
+        return str(int(Number))
+    return f"{Number:.6f}".rstrip("0").rstrip(".")
 
 
 def LatestFatalDetail(Paths: Sequence[Path]) -> Optional[str]:
@@ -379,7 +390,7 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
         Folders=str(len(StepFolders)) if WorkDir.exists() else "-",
         Latest=str(StepFolders[-1]) if StepFolders else "-",
         RateRows=RateRows,
-        SimTime_fs=SimTime,
+        SimTime_ps=SimTime,
         TotalO2Added=TotalO2Added,
         MoleculesRemoved=MoleculesRemoved,
         WallTime=EstimateWallTime(WorkDir, StepFolders),

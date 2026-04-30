@@ -174,7 +174,7 @@ def TestRateAnalysisRowsAndSimTimeAreParsed(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir), "1273_4")
 
     assert Row.RateRows == "2"
-    assert Row.SimTime_fs == "160.5"
+    assert Row.SimTime_ps == "0.1605"
 
 
 def TestRateAnalysisO2AndRemovedTotalsAreParsed(RootDir: Path) -> None:
@@ -207,7 +207,7 @@ def TestMissingGasRemovedColumnLeavesRemovedTotalBlank(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir), "1273_6")
 
     assert Row.RateRows == "2"
-    assert Row.SimTime_fs == "160.5"
+    assert Row.SimTime_ps == "0.1605"
     assert Row.TotalO2Added == "12"
     assert Row.MoleculesRemoved == "-"
 
@@ -242,6 +242,8 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     assert "Simulation" in Text
     assert "873_1" in Text
     assert "Simulation\tStatus" in Tsv
+    assert "SimTime_ps" in Text
+    assert "SimTime_fs" not in Tsv
     assert "TotalO2Added" in Text
     assert "MoleculesRemoved" in Tsv
 
