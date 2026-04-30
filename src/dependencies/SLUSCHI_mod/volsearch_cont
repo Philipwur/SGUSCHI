@@ -440,14 +440,14 @@ while ($stopflag == 0)
         touch $failure_marker
         exit 1
       endif
-       
+      
       python "$sluschipath/../../workflow/OxidationStep.py"
       if ( $? != 0 ) then
         echo FATAL volsearch_cont: OxidationStep.py failed; no new job submitted.
         touch $failure_marker
         exit 1
       endif
-       
+
       $vaspcmd jobsub >> jobsub.log
       if ( $? != 0 ) then
         echo FATAL volsearch_cont: job submission command failed.
