@@ -1,4 +1,18 @@
 #!/bin/csh
-grep $1 INCAR > /dev/null
-if ( $? == 0 ) sed -i '/'$1'/d' INCAR
-echo $1 = $2 >> INCAR
+
+if ( $#argv < 2 ) then
+  echo FATAL UpdateINCAR: expected tag and non-empty value.
+  exit 1
+endif
+
+set tag = "$1"
+set value = "$2"
+
+if ( "$tag" == "" || "$value" == "" ) then
+  echo FATAL UpdateINCAR: tag and value must be non-empty.
+  exit 1
+endif
+
+grep "^ *$tag *=" INCAR > /dev/null
+if ( $? == 0 ) sed -i '/^ *'$tag' *=/d' INCAR
+echo $tag = $value >> INCAR

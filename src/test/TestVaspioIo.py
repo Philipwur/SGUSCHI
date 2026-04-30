@@ -185,3 +185,49 @@ def TestReadXyzSampleFile() -> None:
     Parsed = Vio.ReadXYZ(SamplePath, ReturnCoordinatesType="Direct")
     assert len(Parsed["Positions"]) > 0
     assert "Time" in Parsed["Metadata"].columns
+
+
+def MinimalOutcarText() -> str:
+    """Return a minimal OUTCAR-like file for parser failure-mode tests."""
+    return """
+ POTIM  =   2.0
+ TEBEG  =   1000
+ TEEND  =   1000
+ NIONS =      3
+ ions per type =               1   2
+ direct lattice vectors
+     10.000000  0.000000  0.000000
+      0.000000 10.000000  0.000000
+      0.000000  0.000000 10.000000
+
+ POSITION                                       TOTAL-FORCE (eV/Angst)
+ -----------------------------------------------------------------------------------
+      0.000000  0.000000  0.000000    0.000000  0.000000  0.000000
+      5.000000  5.000000  5.000000    0.000000  0.000000  0.000000
+      5.500000  5.000000  5.000000    0.000000  0.000000  0.000000
+ free  energy   TOTEN  =       -1.000 eV
+"""
+
+
+def TestOutcarParserUsesPoscarSpeciesFallback(TmpPath: Path) -> None:
+    """OUTCAR parsing should recover species from archived POSCAR when POTCAR data is absent."""
+    WorkDir = TmpPath / "Run"
+    WorkDir.mkdir()
+
+    Vio.WritePoscar(WorkDir, MakePositions(), MakeCell())
+    (WorkDir / "OUTCAR").write_text(MinimalOutcarText(), encoding="utf-8")
+
+    Parsed = Vio.OutcarParser(WorkDir)
+
+    assert list(Parsed["Positions"][0]["Element"]) == ["Zr", "O", "O"]
+    assert Parsed["TimesFs"] == [2.0]
+
+
+def TestOutcarParserFailsWhenSpeciesRemainUnresolved(TmpPath: Path) -> None:
+    """The parser should raise instead of assigning fallback X labels."""
+    WorkDir = TmpPath / "Run"
+    WorkDir.mkdir()
+    (WorkDir / "OUTCAR").write_text(MinimalOutcarText(), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Could not resolve OUTCAR element labels"):
+        Vio.OutcarParser(WorkDir)

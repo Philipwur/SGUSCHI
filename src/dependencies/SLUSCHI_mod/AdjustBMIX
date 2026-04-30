@@ -9,24 +9,51 @@ else
   @ flag_adj = 1
 endif
 
-set bmix = `grep BMIX OUTCAR | grep AMIX | head -1 | cut -d= -f3`
+set bmix = `awk '/BMIX/ && /AMIX/ { line=$0; sub(/^.*BMIX[ \t]*=[ \t]*/, "", line); if (match(line, /^[-+]?[0-9]*\.?[0-9]+([Ee][-+]?[0-9]+)?/)) { print substr(line, RSTART, RLENGTH); exit } }' OUTCAR`
+
+if ( "$bmix" == "" ) then
+  echo FATAL AdjustBMIX: could not extract BMIX from OUTCAR.
+  exit 1
+endif
+
+awk -v v="$bmix" 'BEGIN{if (v ~ /^[-+]?[0-9]*\.?[0-9]+([Ee][-+]?[0-9]+)?$/) exit 0; exit 1}'
+if ( $? != 0 ) then
+  echo FATAL AdjustBMIX: extracted BMIX is not numeric: $bmix
+  exit 1
+endif
 
 if ( $flag_adj == 1 ) then
 
-  @ nlines = `grep GAMMA OUTCAR | wc -l`
-  @ nlinesd2 = `awk 'BEGIN{printf("%.0f\n", ('$nlines'-'$nlines'%2)/2);}'`
+  set gamma = `awk '/GAMMA/ && $4 ~ /^[-+]?[0-9]*\.?[0-9]+([Ee][-+]?[0-9]+)?$/ && $4+0 > 0 {print $4}' OUTCAR | sort -n | awk '{v[NR]=$1} END{if (NR > 0) {n=int((NR-(NR%2))/2); if (n < 1) n=1; idx=NR-n+1; printf("%.12g\n", v[idx])}}'`
 
-  set gamma = `grep GAMMA OUTCAR | awk '{print $4}' | sort -n | tail -$nlinesd2 | head -1`
+  if ( "$gamma" == "" ) then
+    echo FATAL AdjustBMIX: could not extract a positive GAMMA from OUTCAR.
+    exit 1
+  endif
+
+  awk -v v="$gamma" 'BEGIN{if (v ~ /^[-+]?[0-9]*\.?[0-9]+([Ee][-+]?[0-9]+)?$/ && v+0 > 0) exit 0; exit 1}'
+  if ( $? != 0 ) then
+    echo FATAL AdjustBMIX: extracted GAMMA is invalid: $gamma
+    exit 1
+  endif
 
   #echo $gamma $bmix
   set bmix_int = `echo "$bmix" | awk '{ V=$1+0 ; printf("%.0f\n", V); }'`
   if ( $bmix_int < 100 ) then
-    set bmix = `awk 'BEGIN{printf("%7.2f\n", '$bmix'/'$gamma');}'`
+    set bmix = `awk -v b="$bmix" -v g="$gamma" 'BEGIN{if (g+0 <= 0) exit 1; printf("%7.2f\n", (b+0)/(g+0));}'`
+    if ( $? != 0 || "$bmix" == "" ) then
+      echo FATAL AdjustBMIX: failed to calculate adjusted BMIX.
+      exit 1
+    endif
   else
     set bmix = $bmix
   endif
 
   $sluschipath/UpdateINCAR BMIX $bmix
+  if ( $? != 0 ) then
+    echo FATAL AdjustBMIX: UpdateINCAR failed for BMIX $bmix.
+    exit 1
+  endif
   echo Adjust BMIX to $bmix
 
 else
