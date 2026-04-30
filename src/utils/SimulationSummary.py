@@ -609,7 +609,7 @@ def Main(Args: Optional[Sequence[str]] = None) -> int:
     if not RootDir.exists():
         print(f"Root directory does not exist: {RootDir}", file=sys.stderr)
         return 1
-    if Parsed.Interval <= 0:
+    if Parsed.interval <= 0:
         print("Summary refresh interval must be positive.", file=sys.stderr)
         return 1
 
