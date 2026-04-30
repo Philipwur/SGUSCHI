@@ -3,4 +3,5 @@ src/**/__pycache__
 src/DevArea
 .vscode
 .pytest_cache
+.test_tmp_simsummary
 CLAUDE.md

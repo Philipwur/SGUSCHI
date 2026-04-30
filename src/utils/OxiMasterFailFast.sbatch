@@ -20,10 +20,27 @@ module load py-pandas
 
 PATH=~/home/pdwurzner/bin:$PATH
 Volsearch_Cont="/home/pdwurzner/SGUSCHI/SGUSCHI/src/dependencies/SLUSCHI_mod/volsearch_cont"
+SummaryScript="/home/pdwurzner/SGUSCHI/SGUSCHI/src/utils/SimulationSummary.py"
+SummaryInterval=60
 
 declare -a Pids=()
 declare -a Labels=()
+declare -a Done=()
 Failed=0
+
+write_summary() {
+    python "$SummaryScript" "$PWD" > .simulation_summary/last_summary_update.log 2>&1 || true
+}
+
+mkdir -p .simulation_summary
+printf "Simulation\tWorkDir\n" > .simulation_summary/expected.tsv
+for temp in 873 973 1073 1273; do
+    for case in 1 2 3 4; do
+        printf "%s_%s\t%s_%s/Dir_VolSearch\n" "$temp" "$case" "$temp" "$case" >> .simulation_summary/expected.tsv
+    done
+done
+
+write_summary
 
 for temp in 873 973 1073 1273; do
     for case in 1 2 3 4; do
@@ -43,13 +60,42 @@ for temp in 873 973 1073 1273; do
 
         Pids+=("$!")
         Labels+=("$Label")
+        Done+=("0")
     done
 done
 
-for idx in "${!Pids[@]}"; do
-    if ! wait "${Pids[$idx]}"; then
-        echo "FATAL OxiMaster: ${Labels[$idx]} failed." >&2
-        Failed=1
+Remaining=${#Pids[@]}
+while (( Remaining > 0 )); do
+    sleep "$SummaryInterval"
+    write_summary
+
+    for idx in "${!Pids[@]}"; do
+        if [[ "${Done[$idx]}" == "1" ]]; then
+            continue
+        fi
+
+        if kill -0 "${Pids[$idx]}" 2>/dev/null; then
+            continue
+        fi
+
+        if ! wait "${Pids[$idx]}"; then
+            echo "FATAL OxiMaster: ${Labels[$idx]} failed." >&2
+            Failed=1
+        fi
+        Done[$idx]="1"
+        Remaining=$((Remaining - 1))
+        write_summary
+    done
+done
+
+write_summary
+
+for idx in "${!Done[@]}"; do
+    if [[ "${Done[$idx]}" != "1" ]]; then
+        if ! wait "${Pids[$idx]}"; then
+            echo "FATAL OxiMaster: ${Labels[$idx]} failed." >&2
+            Failed=1
+        fi
     fi
 done
 

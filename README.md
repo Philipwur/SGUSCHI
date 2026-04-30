@@ -13,8 +13,8 @@ then run first job in each Dir_VolSearch folder)
 
 ## To-Do
 
-! HIGH PRIO
-> Create manual management of O,Zr,C tracking to not accidentalyl add C to gas phase (what happened in daic)
+!Remove need for submission script. Instead create master SGUSCHI process.
+!Remove need for INCAR (and maybe also job.in) in starting folder. Instead have saved template.
 
 Add TestCase to ReadMe
 
