@@ -52,6 +52,16 @@ def WriteExpected(Root: Path, Labels: list[str]) -> None:
     (MetaDir / "expected.tsv").write_text("\n".join(Lines) + "\n", encoding="utf-8")
 
 
+def WriteOxParams(Root: Path, Temperatures: list[int], NSims: int) -> Path:
+    """Write a minimal OxParams file."""
+    OxParams = Root / "OxParams"
+    OxParams.write_text(
+        f"Temperatures = {Temperatures!r}\nNSims = {NSims!r}\n",
+        encoding="utf-8",
+    )
+    return OxParams
+
+
 def FindRow(Rows: list[Summary.SimulationRow], Label: str) -> Summary.SimulationRow:
     """Find one row by label."""
     for Row in Rows:
@@ -142,6 +152,16 @@ def TestMissingExpectedSimulationIsDetected(RootDir: Path) -> None:
     assert Row.Detail == "Dir_VolSearch missing"
 
 
+def TestOxParamsExpectedSimulationsAreDetected(RootDir: Path) -> None:
+    """OxParams should infer expected simulation folders."""
+    OxParams = WriteOxParams(RootDir, [873, 973], 2)
+
+    Rows = Summary.BuildSummary(RootDir, OxParams)
+
+    assert [Row.Simulation for Row in Rows] == ["873_1", "873_2", "973_1", "973_2"]
+    assert FindRow(Rows, "973_2").Status == "MISSING"
+
+
 def TestRateAnalysisRowsAndSimTimeAreParsed(RootDir: Path) -> None:
     """RateAnalysis.csv should provide row count and latest simulated time."""
     WorkDir = MakeWorkDir(RootDir, "1273_4")
@@ -173,13 +193,53 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     assert "Simulation\tStatus" in Tsv
 
 
-def TestOxiMasterTemplateInvokesSimulationSummary() -> None:
-    """The Slurm template should refresh the summary as best-effort reporting."""
+def TestCliParsingAcceptsWatchOptions() -> None:
+    """The CLI should expose one-shot, watch, and daemon options."""
+    Watch = Summary.ParseArgs(
+        [".", "--watch", "--interval", "12.5", "--oxparams", "OxParams", "--quiet"]
+    )
+    Daemon = Summary.ParseArgs([".", "--watch-daemon", "--interval", "60"])
+
+    assert Watch.watch is True
+    assert Watch.interval == 12.5
+    assert Watch.oxparams == "OxParams"
+    assert Watch.quiet is True
+    assert Daemon.watch_daemon is True
+
+
+def TestWatchDaemonPassesParentPid(monkeypatch: pytest.MonkeyPatch, RootDir: Path) -> None:
+    """Daemon startup should pass the original shell PID to the watcher."""
+    Captured = {}
+
+    class FakeProcess:
+        pid = 999
+
+    def FakePopen(Command: list[str], **Kwargs: object) -> FakeProcess:
+        Captured["Command"] = Command
+        Captured["Kwargs"] = Kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(Summary.os, "getppid", lambda: 4321)
+    monkeypatch.setattr(Summary.subprocess, "Popen", FakePopen)
+
+    ExitCode = Summary.StartWatchDaemon(RootDir, RootDir / "OxParams", 60.0, True)
+    Command = Captured["Command"]
+
+    assert ExitCode == 0
+    assert "--watch" in Command
+    assert Command[Command.index("--parent-pid") + 1] == "4321"
+    assert "--quiet" in Command
+
+
+def TestExampleOxidationMasterStartsSummaryDaemon() -> None:
+    """The example master should use the one-line summary watcher."""
     RootDir = Path(__file__).resolve().parents[2]
-    Text = (RootDir / "src" / "utils" / "OxiMasterFailFast.sbatch").read_text(
+    Text = (RootDir / "example" / "OxidationMaster").read_text(
         encoding="utf-8"
     )
 
     assert "SimulationSummary.py" in Text
-    assert "write_summary()" in Text
-    assert "expected.tsv" in Text
+    assert "--watch-daemon" in Text
+    assert "--oxparams OxParams" in Text
+    assert "expected.tsv" not in Text
+    assert not (RootDir / "src" / "utils" / "OxiMasterFailFast.sbatch").exists()

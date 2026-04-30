@@ -1,14 +1,17 @@
 """Create a terminal-readable summary of SGUSCHI simulation folders.
 
 The scanner is intentionally independent from the Slurm controller.  It can be
-called by today's shell master script or imported by a future Python master.
+called by the shell master script or imported by a future Python master.
 """
 
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
+import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -58,10 +61,66 @@ def ReadExpectedSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
     return Rows
 
 
-def DiscoverSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
+def ReadOxParamsSimulations(RootDir: Path, OxParamsPath: Optional[Path]) -> List[Tuple[str, Path]]:
+    """Read expected simulation labels from an OxParams file."""
+    if OxParamsPath is None or not OxParamsPath.exists():
+        return []
+
+    try:
+        Text = OxParamsPath.read_text(encoding="utf-8", errors="ignore")
+        Tree = ast.parse(Text, filename=str(OxParamsPath))
+    except (OSError, SyntaxError):
+        return []
+
+    Assignments = {}
+    for Node in Tree.body:
+        if not isinstance(Node, ast.Assign):
+            continue
+        for Target in Node.targets:
+            if isinstance(Target, ast.Name) and Target.id in {"Temperatures", "NSims"}:
+                try:
+                    Assignments[Target.id] = ast.literal_eval(Node.value)
+                except (TypeError, ValueError, SyntaxError):
+                    pass
+
+    Temperatures = Assignments.get("Temperatures")
+    NSims = Assignments.get("NSims")
+    if not isinstance(Temperatures, (list, tuple)):
+        return []
+    if isinstance(NSims, bool) or not isinstance(NSims, int) or NSims < 1:
+        return []
+
+    Rows: List[Tuple[str, Path]] = []
+    for Temperature in Temperatures:
+        TemperatureLabel = FormatOxParamToken(Temperature)
+        if not TemperatureLabel:
+            continue
+        for Case in range(1, NSims + 1):
+            Label = f"{TemperatureLabel}_{Case}"
+            Rows.append((Label, RootDir / Label / "Dir_VolSearch"))
+    return Rows
+
+
+def FormatOxParamToken(Value: object) -> str:
+    """Format an OxParams token for folder names such as 873_1."""
+    if isinstance(Value, bool):
+        return ""
+    if isinstance(Value, int):
+        return str(Value)
+    if isinstance(Value, float):
+        return str(int(Value)) if Value.is_integer() else FormatFloat(str(Value))
+    return str(Value).strip()
+
+
+def DiscoverSimulations(
+    RootDir: Path,
+    OxParamsPath: Optional[Path] = None,
+) -> List[Tuple[str, Path]]:
     """Find simulation folders under RootDir."""
-    Expected = ReadExpectedSimulations(RootDir)
-    Found = {Label: WorkDir for Label, WorkDir in Expected}
+    Expected = ReadExpectedSimulations(RootDir) + ReadOxParamsSimulations(RootDir, OxParamsPath)
+    Found = {}
+    for Label, WorkDir in Expected:
+        Found.setdefault(Label, WorkDir)
 
     for Child in sorted(RootDir.iterdir(), key=lambda P: P.name):
         if not Child.is_dir():
@@ -278,10 +337,13 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     )
 
 
-def BuildSummary(RootDir: Path) -> List[SimulationRow]:
+def BuildSummary(
+    RootDir: Path,
+    OxParamsPath: Optional[Path] = None,
+) -> List[SimulationRow]:
     """Scan RootDir and return all summary rows."""
     RootDir = RootDir.resolve()
-    Simulations = DiscoverSimulations(RootDir)
+    Simulations = DiscoverSimulations(RootDir, OxParamsPath)
     return [BuildRow(Label, WorkDir) for Label, WorkDir in Simulations]
 
 
@@ -359,6 +421,143 @@ def AtomicWriteText(PathFile: Path, Text: str) -> None:
         pass
 
 
+def ResolveOptionalPath(RootDir: Path, RawPath: Optional[str]) -> Optional[Path]:
+    """Resolve an optional CLI path relative to RootDir."""
+    if RawPath is None:
+        return None
+    PathValue = Path(RawPath)
+    if not PathValue.is_absolute():
+        PathValue = RootDir / PathValue
+    return PathValue.resolve()
+
+
+def WriteSummaryOnce(
+    RootDir: Path,
+    OxParamsPath: Optional[Path] = None,
+    Quiet: bool = False,
+) -> None:
+    """Build and write one summary refresh."""
+    Rows = BuildSummary(RootDir, OxParamsPath)
+    WriteOutputs(RootDir, Rows)
+    if not Quiet:
+        print(f"Wrote {RootDir / SUMMARY_TXT}")
+        print(f"Wrote {RootDir / SUMMARY_TSV}")
+
+
+def BuildDaemonCommand(
+    RootDir: Path,
+    OxParamsPath: Optional[Path],
+    Interval: float,
+    Quiet: bool,
+    ParentPid: int,
+) -> List[str]:
+    """Build the detached watcher command."""
+    Command = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        str(RootDir),
+        "--watch",
+        "--interval",
+        FormatInterval(Interval),
+        "--parent-pid",
+        str(ParentPid),
+    ]
+    if OxParamsPath is not None:
+        Command.extend(["--oxparams", str(OxParamsPath)])
+    if Quiet:
+        Command.append("--quiet")
+    return Command
+
+
+def FormatInterval(Value: float) -> str:
+    """Format interval values without unnecessary .0 suffixes."""
+    return str(int(Value)) if float(Value).is_integer() else str(Value)
+
+
+def StartWatchDaemon(
+    RootDir: Path,
+    OxParamsPath: Optional[Path],
+    Interval: float,
+    Quiet: bool,
+) -> int:
+    """Start a detached watcher process and return immediately."""
+    ParentPid = os.getppid()
+    Command = BuildDaemonCommand(RootDir, OxParamsPath, Interval, Quiet, ParentPid)
+    MetaDir = RootDir / ".simulation_summary"
+    try:
+        MetaDir.mkdir(exist_ok=True)
+        LogFile = (MetaDir / "watcher.log").open("a", encoding="utf-8")
+    except OSError as Error:
+        print(f"Could not create summary watcher log: {Error}", file=sys.stderr)
+        return 1
+
+    PopenKwargs = {
+        "cwd": str(RootDir),
+        "stdin": subprocess.DEVNULL,
+        "stdout": LogFile,
+        "stderr": subprocess.STDOUT,
+        "close_fds": True,
+    }
+    if os.name == "nt":
+        PopenKwargs["creationflags"] = (
+            getattr(subprocess, "DETACHED_PROCESS", 0)
+            | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        )
+    else:
+        PopenKwargs["start_new_session"] = True
+
+    try:
+        Process = subprocess.Popen(Command, **PopenKwargs)
+    except OSError as Error:
+        print(f"Could not start summary watcher: {Error}", file=sys.stderr)
+        LogFile.close()
+        return 1
+    LogFile.close()
+
+    if not Quiet:
+        print(f"Started summary watcher PID {Process.pid}")
+    return 0
+
+
+def RunWatchLoop(
+    RootDir: Path,
+    OxParamsPath: Optional[Path],
+    Interval: float,
+    Quiet: bool,
+    ParentPid: Optional[int],
+) -> int:
+    """Refresh summaries until interrupted or the monitored parent exits."""
+    try:
+        WriteSummaryOnce(RootDir, OxParamsPath, Quiet)
+        NextWrite = time.monotonic() + Interval
+        while ParentPid is None or ProcessIsAlive(ParentPid):
+            SleepFor = min(1.0, max(0.0, NextWrite - time.monotonic()))
+            time.sleep(SleepFor)
+            if time.monotonic() >= NextWrite:
+                WriteSummaryOnce(RootDir, OxParamsPath, Quiet)
+                NextWrite = time.monotonic() + Interval
+        WriteSummaryOnce(RootDir, OxParamsPath, Quiet)
+        return 0
+    except KeyboardInterrupt:
+        WriteSummaryOnce(RootDir, OxParamsPath, Quiet)
+        return 130
+
+
+def ProcessIsAlive(Pid: int) -> bool:
+    """Return whether a process id appears to still exist."""
+    if Pid <= 0:
+        return False
+    try:
+        os.kill(Pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def ParseArgs(Args: Optional[Sequence[str]] = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     Parser = argparse.ArgumentParser(description=__doc__)
@@ -367,6 +566,38 @@ def ParseArgs(Args: Optional[Sequence[str]] = None) -> argparse.Namespace:
         nargs="?",
         default=".",
         help="Root directory containing simulation folders such as 873_2.",
+    )
+    Parser.add_argument(
+        "--oxparams",
+        default=None,
+        help="Optional OxParams file used to infer expected simulation folders.",
+    )
+    Parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="Keep refreshing the summary until interrupted.",
+    )
+    Parser.add_argument(
+        "--watch-daemon",
+        action="store_true",
+        help="Start a detached watcher and return immediately.",
+    )
+    Parser.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        help="Refresh interval in seconds for watch modes.",
+    )
+    Parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress normal status output.",
+    )
+    Parser.add_argument(
+        "--parent-pid",
+        type=int,
+        default=None,
+        help=argparse.SUPPRESS,
     )
     return Parser.parse_args(Args)
 
@@ -378,10 +609,23 @@ def Main(Args: Optional[Sequence[str]] = None) -> int:
     if not RootDir.exists():
         print(f"Root directory does not exist: {RootDir}", file=sys.stderr)
         return 1
-    Rows = BuildSummary(RootDir)
-    WriteOutputs(RootDir, Rows)
-    print(f"Wrote {RootDir / SUMMARY_TXT}")
-    print(f"Wrote {RootDir / SUMMARY_TSV}")
+    if Parsed.Interval <= 0:
+        print("Summary refresh interval must be positive.", file=sys.stderr)
+        return 1
+
+    OxParamsPath = ResolveOptionalPath(RootDir, Parsed.oxparams)
+    if Parsed.watch_daemon:
+        return StartWatchDaemon(RootDir, OxParamsPath, Parsed.interval, Parsed.quiet)
+    if Parsed.watch:
+        return RunWatchLoop(
+            RootDir,
+            OxParamsPath,
+            Parsed.interval,
+            Parsed.quiet,
+            Parsed.parent_pid,
+        )
+
+    WriteSummaryOnce(RootDir, OxParamsPath, Parsed.quiet)
     return 0
 
 

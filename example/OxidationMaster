@@ -24,6 +24,10 @@ module load py-pandas
 # Set paths
 PATH=~/home/pdwurzner/bin:$PATH
 Volsearch_Cont="/home/pdwurzner/SGUSCHI/SGUSCHI/src/dependencies/SLUSCHI_mod/volsearch_cont"
+SummaryScript="/home/pdwurzner/SGUSCHI/SGUSCHI/src/utils/SimulationSummary.py"
+
+#Start summary table
+python $SummaryScript "$PWD" --watch-daemon --interval 60 --oxparams OxParams --quiet
 
 # Run volsearch_cont for all temperature/case combinations
 for temp in 873 973 1073 1273; do

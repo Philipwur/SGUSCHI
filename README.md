@@ -13,7 +13,7 @@ then run first job in each Dir_VolSearch folder)
 
 ## To-Do
 
-!Remove need for submission script. Instead create master SGUSCHI process.
+!Remove need for master submission script. Instead create master SGUSCHI process.
 !Remove need for INCAR (and maybe also job.in) in starting folder. Instead have saved template.
 
 Add TestCase to ReadMe
