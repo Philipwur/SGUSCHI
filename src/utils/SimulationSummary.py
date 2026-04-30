@@ -16,7 +16,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 SUMMARY_TXT = "SimulationSummary.txt"
@@ -36,10 +36,28 @@ class SimulationRow:
     Latest: str
     RateRows: str
     SimTime_fs: str
+    TotalO2Added: str
+    MoleculesRemoved: str
     WallTime: str
     Done: str
     Failed: str
     Detail: str
+
+
+SUMMARY_HEADERS = (
+    "Simulation",
+    "Status",
+    "Folders",
+    "Latest",
+    "RateRows",
+    "SimTime_fs",
+    "TotalO2Added",
+    "MoleculesRemoved",
+    "WallTime",
+    "Done",
+    "Failed",
+    "Detail",
+)
 
 
 def ReadExpectedSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
@@ -152,21 +170,22 @@ def NumericStepFolders(WorkDir: Path) -> List[int]:
     )
 
 
-def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str]:
-    """Return row count and last Time (fs) without importing pandas."""
+def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str, str, str]:
+    """Return compact RateAnalysis metrics without importing pandas."""
     RatePath = WorkDir / "RateAnalysis.csv"
     if not RatePath.exists():
-        return "-", "-"
+        return "-", "-", "-", "-"
 
     try:
         with RatePath.open("r", encoding="utf-8-sig", errors="ignore", newline="") as File:
             Reader = csv.DictReader(File)
             Rows = list(Reader)
+            FieldNames = Reader.fieldnames or []
     except Exception:
-        return "ERR", "-"
+        return "ERR", "-", "-", "-"
 
     if not Rows:
-        return "0", "-"
+        return "0", "-", "-", "-"
 
     TimeValue = "-"
     for Key in ("Time (fs)", "Time", "Time_fs"):
@@ -174,7 +193,38 @@ def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str]:
         if Raw not in (None, ""):
             TimeValue = FormatFloat(Raw)
             break
-    return str(len(Rows)), TimeValue
+
+    TotalO2Added = "-"
+    RawO2Added = Rows[-1].get("O2 Added")
+    if RawO2Added not in (None, ""):
+        TotalO2Added = FormatFloat(RawO2Added)
+
+    MoleculesRemoved = CountRemovedMolecules(Rows, FieldNames)
+    return str(len(Rows)), TimeValue, TotalO2Added, MoleculesRemoved
+
+
+def CountRemovedMolecules(Rows: Sequence[Dict[str, str]], FieldNames: Sequence[str]) -> str:
+    """Count removed molecule entries from the Gas Removed column."""
+    if "Gas Removed" not in FieldNames:
+        return "-"
+
+    Total = 0
+    for Row in Rows:
+        Raw = Row.get("Gas Removed")
+        if Raw in (None, ""):
+            continue
+        try:
+            Removed = ast.literal_eval(Raw)
+        except (SyntaxError, ValueError, TypeError):
+            return "-"
+        if not isinstance(Removed, (list, tuple)):
+            return "-"
+        for Molecule in Removed:
+            if not isinstance(Molecule, (list, tuple)):
+                return "-"
+        Total += len(Removed)
+
+    return str(Total)
 
 
 def FormatFloat(Value: str) -> str:
@@ -321,7 +371,7 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     StepFolders = NumericStepFolders(WorkDir)
     FatalDetail = LatestFatalDetail([WorkDir.parent / "log.out", WorkDir / "jobsub.log"])
     Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders, FatalDetail)
-    RateRows, SimTime = ReadRateAnalysis(WorkDir)
+    RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
         Simulation=Label,
@@ -330,6 +380,8 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
         Latest=str(StepFolders[-1]) if StepFolders else "-",
         RateRows=RateRows,
         SimTime_fs=SimTime,
+        TotalO2Added=TotalO2Added,
+        MoleculesRemoved=MoleculesRemoved,
         WallTime=EstimateWallTime(WorkDir, StepFolders),
         Done=Done,
         Failed=Failed,
@@ -358,18 +410,7 @@ def Truncate(Value: Optional[str], MaxLen: int) -> str:
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:
     """Return a fixed-width table suitable for terminal inspection."""
-    Headers = [
-        "Simulation",
-        "Status",
-        "Folders",
-        "Latest",
-        "RateRows",
-        "SimTime_fs",
-        "WallTime",
-        "Done",
-        "Failed",
-        "Detail",
-    ]
+    Headers = SUMMARY_HEADERS
     Values = [[getattr(Row, Header) for Header in Headers] for Row in Rows]
     Widths = []
     for Index, Header in enumerate(Headers):
@@ -392,7 +433,7 @@ def WriteOutputs(RootDir: Path, Rows: Sequence[SimulationRow]) -> None:
 
     AtomicWriteText(TextPath, FormatTable(Rows))
 
-    Headers = list(SimulationRow.__dataclass_fields__.keys())
+    Headers = SUMMARY_HEADERS
     Lines = ["\t".join(Headers)]
     for Row in Rows:
         Lines.append("\t".join(str(getattr(Row, Header)) for Header in Headers))

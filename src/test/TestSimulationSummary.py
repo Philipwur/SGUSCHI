@@ -177,6 +177,57 @@ def TestRateAnalysisRowsAndSimTimeAreParsed(RootDir: Path) -> None:
     assert Row.SimTime_fs == "160.5"
 
 
+def TestRateAnalysisO2AndRemovedTotalsAreParsed(RootDir: Path) -> None:
+    """RateAnalysis.csv should provide final O2 added and removed molecule totals."""
+    WorkDir = MakeWorkDir(RootDir, "1273_5")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "RateAnalysis.csv").write_text(
+        "Time (fs),O2 Count,Smoothed O2 Count,O2 Added,Gas Removed,Free Gas Fraction\n"
+        "0,10,10,10,[],1\n"
+        "80,8,8.5,11,\"[('C', 'O')]\",0.9\n"
+        "160.5,7,7.5,12,\"[('C', 'O', 'O')]\",0.8\n",
+        encoding="utf-8",
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "1273_5")
+
+    assert Row.TotalO2Added == "12"
+    assert Row.MoleculesRemoved == "2"
+
+
+def TestMissingGasRemovedColumnLeavesRemovedTotalBlank(RootDir: Path) -> None:
+    """Missing Gas Removed should not prevent other RateAnalysis metrics."""
+    WorkDir = MakeWorkDir(RootDir, "1273_6")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "RateAnalysis.csv").write_text(
+        "Time (fs),O2 Count,O2 Added\n0,10,10\n160.5,9,12\n",
+        encoding="utf-8",
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "1273_6")
+
+    assert Row.RateRows == "2"
+    assert Row.SimTime_fs == "160.5"
+    assert Row.TotalO2Added == "12"
+    assert Row.MoleculesRemoved == "-"
+
+
+def TestMalformedGasRemovedColumnDoesNotCrash(RootDir: Path) -> None:
+    """Malformed Gas Removed values should leave removed total blank."""
+    WorkDir = MakeWorkDir(RootDir, "1273_7")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "RateAnalysis.csv").write_text(
+        "Time (fs),O2 Count,O2 Added,Gas Removed\n0,10,10,[]\n160.5,9,12,not-a-list\n",
+        encoding="utf-8",
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "1273_7")
+
+    assert Row.RateRows == "2"
+    assert Row.TotalO2Added == "12"
+    assert Row.MoleculesRemoved == "-"
+
+
 def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     """The CLI writer should produce fixed-width text and TSV outputs."""
     WorkDir = MakeWorkDir(RootDir, "873_1")
@@ -191,6 +242,29 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     assert "Simulation" in Text
     assert "873_1" in Text
     assert "Simulation\tStatus" in Tsv
+    assert "TotalO2Added" in Text
+    assert "MoleculesRemoved" in Tsv
+
+
+def TestSummaryOutputsOverwriteOldStructure(RootDir: Path) -> None:
+    """Old-format summary files should be replaced with the current schema."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "RateAnalysis.csv").write_text(
+        "Time (fs),O2 Count,O2 Added,Gas Removed\n0,10,10,[]\n",
+        encoding="utf-8",
+    )
+    (RootDir / "SimulationSummary.txt").write_text("old header\nold row\n", encoding="utf-8")
+    (RootDir / "SimulationSummary.tsv").write_text("Old\tHeader\nold\trow\n", encoding="utf-8")
+
+    Summary.WriteOutputs(RootDir, Summary.BuildSummary(RootDir))
+
+    Text = (RootDir / "SimulationSummary.txt").read_text(encoding="utf-8")
+    Tsv = (RootDir / "SimulationSummary.tsv").read_text(encoding="utf-8")
+    assert "old header" not in Text
+    assert "Old\tHeader" not in Tsv
+    assert "TotalO2Added" in Text
+    assert "MoleculesRemoved" in Tsv
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:
