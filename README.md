@@ -15,6 +15,8 @@ then run first job in each Dir_VolSearch folder)
 
 !Remove need for master submission script. Instead create master SGUSCHI process.
 !Remove need for INCAR (and maybe also job.in) in starting folder. Instead have saved template.
+!Update Simulationsummary to not put simulationsummary tsv in main directory. Instead create log folder or something, and rename .txt to just SimulationSummary
+!Set time limit variable.
 
 Add TestCase to ReadMe
 
