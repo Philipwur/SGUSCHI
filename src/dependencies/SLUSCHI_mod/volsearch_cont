@@ -136,7 +136,7 @@ while ($stopflag == 0)
     endif
     rm -f pressure3.out pressure3_total.out
     if ( $pressure_fallback == 0 ) then
-    grep 'in kB' OUTCAR -B1 | grep -v 'in kB' | grep -v '\-\-' | grep -v CPU | grep -v cpu | awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF >= 7 {ok=1; for (i=2;i<=7;i++) if (!isnum($i)) ok=0; if (ok) print $2,$3,$4,$5,$6,$7}' > pressure3.out # get Pxx, Pyy, Pzz, Pxy, Pyz, Pzx
+    grep 'in kB' OUTCAR -B1 | grep -v 'in kB' | grep -v '\-\-' | grep -v CPU | grep -v cpu | awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF >= 7 {ok=1; for (i=2;i<=7;i++) if (isnum($i) == 0) ok=0; if (ok) print $2,$3,$4,$5,$6,$7}' > pressure3.out # get Pxx, Pyy, Pzz, Pxy, Pyz, Pzx
     if ( ! -s pressure3.out ) then
       echo WARNING volsearch_cont: pressure3.out has no valid numeric stress rows after parsing OUTCAR; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
@@ -144,7 +144,7 @@ while ($stopflag == 0)
     endif
     endif
     if ( $pressure_fallback == 0 ) then
-    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} {if (NF != 6) bad=1; for (i=1;i<=NF;i++) if (!isnum($i)) bad=1; n++} END{if (bad || n < 1) exit 1}' pressure3.out
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} {if (NF != 6) bad=1; for (i=1;i<=NF;i++) if (isnum($i) == 0) bad=1; n++} END{if (bad || n < 1) exit 1}' pressure3.out
     if ( $? != 0 ) then
       echo WARNING volsearch_cont: pressure3.out must contain only six-column numeric stress rows; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
@@ -186,7 +186,7 @@ while ($stopflag == 0)
     endif
     endif
     if ( $pressure_fallback == 0 ) then
-    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (!isnum($1)) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_kinetic.out
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_kinetic.out
     if ( $? != 0 ) then
       echo WARNING volsearch_cont: pressure_kinetic.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
@@ -194,7 +194,7 @@ while ($stopflag == 0)
     endif
     endif
     if ( $pressure_fallback == 0 ) then
-    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (!isnum($1)) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_Pulay.out
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_Pulay.out
     if ( $? != 0 ) then
       echo WARNING volsearch_cont: pressure_Pulay.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
@@ -231,7 +231,7 @@ while ($stopflag == 0)
     endif
     endif
     if ( $pressure_fallback == 0 ) then
-    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (!isnum($1)) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_target.out
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_target.out
     if ( $? != 0 ) then
       echo WARNING volsearch_cont: pressure_target.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
@@ -239,7 +239,7 @@ while ($stopflag == 0)
     endif
     endif
     if ( $pressure_fallback == 0 ) then
-    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {last=$1; seen=1} END{gsub(/[Dd]/,"E",last); if (!seen || !isnum(last) || last+0 <= 0) exit 1}' volume.out
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {last=$1; seen=1} END{gsub(/[Dd]/,"E",last); if (seen < 1 || isnum(last) == 0 || last+0 <= 0) exit 1}' volume.out
     if ( $? != 0 ) then
       echo WARNING volsearch_cont: volume.out is missing or its last value is invalid; skipping pressure-controlled lattice update for this job.
       @ pressure_fallback = 1
