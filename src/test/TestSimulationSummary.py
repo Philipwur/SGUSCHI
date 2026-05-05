@@ -236,11 +236,12 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     Rows = Summary.BuildSummary(RootDir)
     Summary.WriteOutputs(RootDir, Rows)
 
-    Text = (RootDir / "SimulationSummary.txt").read_text(encoding="utf-8")
-    Tsv = (RootDir / "SimulationSummary.tsv").read_text(encoding="utf-8")
+    Text = (RootDir / "SimulationSummary").read_text(encoding="utf-8")
+    Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
 
     assert "Simulation" in Text
     assert "873_1" in Text
+    assert (RootDir / "logs").is_dir()
     assert "Simulation\tStatus" in Tsv
     assert "SimTime_ps" in Text
     assert "SimTime_fs" not in Tsv
@@ -261,12 +262,14 @@ def TestSummaryOutputsOverwriteOldStructure(RootDir: Path) -> None:
 
     Summary.WriteOutputs(RootDir, Summary.BuildSummary(RootDir))
 
-    Text = (RootDir / "SimulationSummary.txt").read_text(encoding="utf-8")
-    Tsv = (RootDir / "SimulationSummary.tsv").read_text(encoding="utf-8")
+    Text = (RootDir / "SimulationSummary").read_text(encoding="utf-8")
+    Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
     assert "old header" not in Text
     assert "Old\tHeader" not in Tsv
     assert "TotalO2Added" in Text
     assert "MoleculesRemoved" in Tsv
+    assert not (RootDir / "SimulationSummary.txt").exists()
+    assert not (RootDir / "SimulationSummary.tsv").exists()
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:
