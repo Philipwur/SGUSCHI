@@ -120,6 +120,27 @@ def TestFailedSimulationFatalLogIsDetected(RootDir: Path) -> None:
     assert "AdjustBMIX failed" in Row.Detail
 
 
+def TestDoneMarkerOverridesOlderFatalLog(RootDir: Path) -> None:
+    """Completed trajectories should not stay failed because of recoverable helper FATAL text."""
+    WorkDir = MakeWorkDir(RootDir, "873_4")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "volsearch_is_done").write_text("", encoding="utf-8")
+    (WorkDir.parent / "log.out").write_text(
+        "FATAL PressureAvg.x: invalid pressure3.out\n"
+        "WARNING volsearch_cont: PressureAvg.x failed or did not create pressure3_total.out; "
+        "skipping pressure-controlled lattice update for this job.\n"
+        "Volume search completed.\n",
+        encoding="utf-8",
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_4")
+
+    assert Row.Status == "DONE"
+    assert Row.Done == "Y"
+    assert Row.Failed == "N"
+    assert Row.Detail == "volsearch_is_done"
+
+
 def TestNotStartedSimulationIsDetected(RootDir: Path) -> None:
     """An empty Dir_VolSearch should be NOT_STARTED."""
     MakeWorkDir(RootDir, "973_1")

@@ -344,10 +344,10 @@ def DetermineStatus(
 
     if FailedMarker.exists():
         return "FAILED", "N", "Y", "sguschi_failed"
-    if FatalDetail:
-        return "FAILED", "N", "Y", FatalDetail
     if DoneMarker.exists():
         return "DONE", "Y", "N", "volsearch_is_done"
+    if FatalDetail:
+        return "FAILED", "N", "Y", FatalDetail
 
     RecentActivity = LatestActivityTime(WorkDir)
     if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
