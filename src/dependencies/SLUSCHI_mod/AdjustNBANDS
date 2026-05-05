@@ -4,18 +4,42 @@ set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
 $sluschipath/getinfo.csh adj_nbands job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_adj = `$sluschipath/getinfo.csh adj_nbands job.in`
+  set flag_adj_value = `$sluschipath/getinfo.csh adj_nbands job.in`
+  awk -v v="$flag_adj_value" 'BEGIN{if (v ~ /^[0-9]+$/) exit 0; exit 1}'
+  if ( $? == 0 ) then
+    @ flag_adj = $flag_adj_value
+  else
+    echo WARNING AdjustNBANDS: invalid adj_nbands value $flag_adj_value; using default adjustment behavior.
+    @ flag_adj = 1
+  endif
 else
   @ flag_adj = 1
 endif
 
-@ nbands = `grep -B6 'soft charge-density' OUTCAR | grep -B4 '\-\-\-' | tail -4 | head -1 | awk '{print $1}'`
+set nbands_value = `grep -B6 'soft charge-density' OUTCAR | grep -B4 '\-\-\-' | tail -4 | head -1 | awk '{print $1}'`
+if ( "$nbands_value" == "" ) then
+  echo WARNING AdjustNBANDS: could not extract NBANDS from OUTCAR; keeping current NBANDS/default.
+  exit 0
+endif
+awk -v v="$nbands_value" 'BEGIN{if (v ~ /^[0-9]+$/ && v+0 > 0) exit 0; exit 1}'
+if ( $? != 0 ) then
+  echo WARNING AdjustNBANDS: extracted NBANDS is invalid: $nbands_value; keeping current NBANDS/default.
+  exit 0
+endif
+@ nbands = $nbands_value
 
 if ( $flag_adj == 1 ) then
 
   $sluschipath/getinfo.csh add_nbands job.in > /dev/null
   if ( $? == 0 ) then
-    @ add_nbands = `$sluschipath/getinfo.csh add_nbands job.in`
+    set add_nbands_value = `$sluschipath/getinfo.csh add_nbands job.in`
+    awk -v v="$add_nbands_value" 'BEGIN{if (v ~ /^[0-9]+$/) exit 0; exit 1}'
+    if ( $? == 0 ) then
+      @ add_nbands = $add_nbands_value
+    else
+      echo WARNING AdjustNBANDS: invalid add_nbands value $add_nbands_value; using default add_nbands 10.
+      @ add_nbands = 10
+    endif
   else
     @ add_nbands = 10
   endif
@@ -23,11 +47,26 @@ if ( $flag_adj == 1 ) then
 
   @ stop = 0
   while ( $stop == 0 )
+
+    if ( $nbands < 1 ) then
+      echo WARNING AdjustNBANDS: could not determine occupied band from OUTCAR; keeping current NBANDS/default.
+      exit 0
+    endif
   
     grep '^ *'$nbands'' OUTCAR | awk '{print $3}' > occupancy_states
   
-    set a = `cat occupancy_states | sort | tail -1`
-    if ( ! ($a == 0.00000) ) then
+    set a = `sort occupancy_states | tail -1`
+    if ( "$a" == "" ) then
+      echo WARNING AdjustNBANDS: missing occupancy data for band $nbands; keeping current NBANDS/default.
+      exit 0
+    endif
+    awk -v v="$a" 'BEGIN{if (v ~ /^[-+]?[0-9]*[.]?[0-9]+([Ee][-+]?[0-9]+)?$/) exit 0; exit 1}'
+    if ( $? != 0 ) then
+      echo WARNING AdjustNBANDS: non-numeric occupancy value $a; keeping current NBANDS/default.
+      exit 0
+    endif
+    awk -v v="$a" 'BEGIN{if (v+0 != 0.0) exit 0; exit 1}'
+    if ( $? == 0 ) then
       @ stop = 1
     endif
   
@@ -35,11 +74,19 @@ if ( $flag_adj == 1 ) then
   end
   @ nbands = $nbands + $add_nbands
   $sluschipath/UpdateINCAR NBANDS $nbands
+  if ( $? != 0 ) then
+    echo WARNING AdjustNBANDS: UpdateINCAR failed for NBANDS $nbands; keeping current NBANDS/default.
+    exit 0
+  endif
   echo Adjust NBANDS to $nbands
 
 else
 
   $sluschipath/UpdateINCAR NBANDS $nbands
+  if ( $? != 0 ) then
+    echo WARNING AdjustNBANDS: UpdateINCAR failed for NBANDS $nbands; keeping current NBANDS/default.
+    exit 0
+  endif
   echo Maintain NBANDS at $nbands
 
 endif

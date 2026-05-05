@@ -72,6 +72,20 @@ def TestVolsearchContWarnsOnIncarAdjustmentFailures() -> None:
     assert "FATAL volsearch_cont: AdjustBMIX failed" not in Text
 
 
+def TestAdjustNbandsFallsBackWithoutCshExpressionErrors() -> None:
+    """NBANDS adjustment should warn and keep current defaults on bad OUTCAR data."""
+    Text = ReadScript("AdjustNBANDS")
+
+    assert "@ nbands = `grep" not in Text
+    assert "if ( ! ($a == 0.00000) )" not in Text
+    assert "could not extract NBANDS from OUTCAR; keeping current NBANDS/default." in Text
+    assert "could not determine occupied band from OUTCAR; keeping current NBANDS/default." in Text
+    assert "missing occupancy data for band $nbands; keeping current NBANDS/default." in Text
+    assert "non-numeric occupancy value $a; keeping current NBANDS/default." in Text
+    assert "invalid add_nbands value $add_nbands_value; using default add_nbands 10." in Text
+    assert "UpdateINCAR failed for NBANDS $nbands; keeping current NBANDS/default." in Text
+
+
 def TestPressureAvgFortranUsesCheckedReads() -> None:
     """PressureAvg.x should fail cleanly on bad input files."""
     Text = ReadScript("PressureAvg.f90")
