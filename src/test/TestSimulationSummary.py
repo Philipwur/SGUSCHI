@@ -268,8 +268,10 @@ def TestSummaryOutputsOverwriteOldStructure(RootDir: Path) -> None:
     assert "Old\tHeader" not in Tsv
     assert "TotalO2Added" in Text
     assert "MoleculesRemoved" in Tsv
-    assert not (RootDir / "SimulationSummary.txt").exists()
-    assert not (RootDir / "SimulationSummary.tsv").exists()
+    if (RootDir / "SimulationSummary.txt").exists():
+        assert (RootDir / "SimulationSummary.txt").read_text(encoding="utf-8") == "Moved to SimulationSummary\n"
+    if (RootDir / "SimulationSummary.tsv").exists():
+        assert (RootDir / "SimulationSummary.tsv").read_text(encoding="utf-8") == "Moved to logs/SimulationSummary.tsv\n"
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:

@@ -467,7 +467,17 @@ def RemoveLegacyOutputs(RootDir: Path) -> None:
         try:
             PathFile.unlink()
         except OSError:
-            pass
+            Replacement = RootDir / SUMMARY_TXT
+            if RelativePath.suffix == ".tsv":
+                Replacement = RootDir / SUMMARY_TSV
+            try:
+                PathFile.write_text(
+                    f"Moved to {Replacement.relative_to(RootDir).as_posix()}\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+            except OSError:
+                pass
 
 
 def AtomicWriteText(PathFile: Path, Text: str) -> None:
