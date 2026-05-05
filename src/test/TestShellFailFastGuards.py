@@ -38,7 +38,6 @@ def TestVolsearchContStopsBeforeSubmittingAfterCriticalFailures() -> None:
     Text = ReadScript("volsearch_cont")
 
     assert "DetermineSize.x failed" in Text
-    assert "AdjustBMIX failed" in Text
     assert "OxidationStep.py failed; no new job submitted" in Text
     assert Text.index("OxidationStep.py failed; no new job submitted") < Text.index("$vaspcmd jobsub")
 
@@ -59,6 +58,18 @@ def TestVolsearchContRecoversFromPressureUpdateFailures() -> None:
     assert "VolSearchStop.x skipped" in Text
     assert "current lattice will be reused" in Text
     assert Text.index("PressureAvg.x failed or did not create pressure3_total.out") < Text.index("$vaspcmd jobsub")
+
+
+def TestVolsearchContWarnsOnIncarAdjustmentFailures() -> None:
+    """INCAR adjustment helpers should not stop an otherwise usable job."""
+    Text = ReadScript("volsearch_cont")
+
+    assert "WARNING volsearch_cont: AdjustPOTIM failed; keeping current POTIM." in Text
+    assert "WARNING volsearch_cont: AdjustNBANDS failed; keeping current NBANDS/default." in Text
+    assert "WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX." in Text
+    assert "FATAL volsearch_cont: AdjustPOTIM failed" not in Text
+    assert "FATAL volsearch_cont: AdjustNBANDS failed" not in Text
+    assert "FATAL volsearch_cont: AdjustBMIX failed" not in Text
 
 
 def TestPressureAvgFortranUsesCheckedReads() -> None:

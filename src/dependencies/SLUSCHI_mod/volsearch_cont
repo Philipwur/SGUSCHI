@@ -331,21 +331,15 @@ while ($stopflag == 0)
     echo --- ADJUST INCAR TAGS ---
     $sluschipath/AdjustPOTIM
     if ( $? != 0 ) then
-      echo FATAL volsearch_cont: AdjustPOTIM failed.
-      touch $failure_marker
-      exit 1
+      echo WARNING volsearch_cont: AdjustPOTIM failed; keeping current POTIM.
     endif
     $sluschipath/AdjustNBANDS
     if ( $? != 0 ) then
-      echo FATAL volsearch_cont: AdjustNBANDS failed.
-      touch $failure_marker
-      exit 1
+      echo WARNING volsearch_cont: AdjustNBANDS failed; keeping current NBANDS/default.
     endif
     $sluschipath/AdjustBMIX
     if ( $? != 0 ) then
-      echo FATAL volsearch_cont: AdjustBMIX failed.
-      touch $failure_marker
-      exit 1
+      echo WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX.
     endif
     mkdir $nstep
     if ( $? != 0 ) then
