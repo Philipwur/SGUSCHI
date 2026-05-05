@@ -249,29 +249,21 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     assert "MoleculesRemoved" in Tsv
 
 
-def TestSummaryOutputsOverwriteOldStructure(RootDir: Path) -> None:
-    """Old-format summary files should be replaced with the current schema."""
+def TestSummaryOutputsUseCurrentSchema(RootDir: Path) -> None:
+    """Summary outputs should use the current schema and output locations."""
     WorkDir = MakeWorkDir(RootDir, "873_1")
     (WorkDir / "1").mkdir()
     (WorkDir / "RateAnalysis.csv").write_text(
         "Time (fs),O2 Count,O2 Added,Gas Removed\n0,10,10,[]\n",
         encoding="utf-8",
     )
-    (RootDir / "SimulationSummary.txt").write_text("old header\nold row\n", encoding="utf-8")
-    (RootDir / "SimulationSummary.tsv").write_text("Old\tHeader\nold\trow\n", encoding="utf-8")
 
     Summary.WriteOutputs(RootDir, Summary.BuildSummary(RootDir))
 
     Text = (RootDir / "SimulationSummary").read_text(encoding="utf-8")
     Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
-    assert "old header" not in Text
-    assert "Old\tHeader" not in Tsv
     assert "TotalO2Added" in Text
     assert "MoleculesRemoved" in Tsv
-    if (RootDir / "SimulationSummary.txt").exists():
-        assert (RootDir / "SimulationSummary.txt").read_text(encoding="utf-8") == "Moved to SimulationSummary\n"
-    if (RootDir / "SimulationSummary.tsv").exists():
-        assert (RootDir / "SimulationSummary.tsv").read_text(encoding="utf-8") == "Moved to logs/SimulationSummary.tsv\n"
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:

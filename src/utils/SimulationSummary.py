@@ -21,10 +21,6 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 SUMMARY_TXT = Path("SimulationSummary")
 SUMMARY_TSV = Path("logs") / "SimulationSummary.tsv"
-LEGACY_SUMMARY_PATHS = (
-    Path("SimulationSummary.txt"),
-    Path("SimulationSummary.tsv"),
-)
 EXPECTED_PATH = Path(".simulation_summary") / "expected.tsv"
 SIMULATION_RE = re.compile(r"^\d+_\d+$")
 FATAL_RE = re.compile(r"\bFATAL\b", flags=re.IGNORECASE)
@@ -454,30 +450,6 @@ def WriteOutputs(RootDir: Path, Rows: Sequence[SimulationRow]) -> None:
     for Row in Rows:
         Lines.append("\t".join(str(getattr(Row, Header)) for Header in Headers))
     AtomicWriteText(TsvPath, "\n".join(Lines) + "\n")
-    RemoveLegacyOutputs(RootDir)
-
-
-def RemoveLegacyOutputs(RootDir: Path) -> None:
-    """Remove old root-level summary names after writing current outputs."""
-    CurrentPaths = {RootDir / SUMMARY_TXT, RootDir / SUMMARY_TSV}
-    for RelativePath in LEGACY_SUMMARY_PATHS:
-        PathFile = RootDir / RelativePath
-        if PathFile in CurrentPaths or not PathFile.exists():
-            continue
-        try:
-            PathFile.unlink()
-        except OSError:
-            Replacement = RootDir / SUMMARY_TXT
-            if RelativePath.suffix == ".tsv":
-                Replacement = RootDir / SUMMARY_TSV
-            try:
-                PathFile.write_text(
-                    f"Moved to {Replacement.relative_to(RootDir).as_posix()}\n",
-                    encoding="utf-8",
-                    newline="\n",
-                )
-            except OSError:
-                pass
 
 
 def AtomicWriteText(PathFile: Path, Text: str) -> None:
