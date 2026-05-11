@@ -30,34 +30,38 @@ FATAL_RE = re.compile(r"\bFATAL\b", flags=re.IGNORECASE)
 class SimulationRow:
     """One row in the root-level simulation summary."""
 
-    Simulation: str
+    Sim: str
     Status: str
-    Folders: str
+    Dirs: str
     Latest: str
-    RateRows: str
-    SimTime_ps: str
-    TotalO2Added: str
-    MoleculesRemoved: str
-    WallTime: str
+    Rows: str
+    Time_ps: str
+    O2Added: str
+    GasRem: str
+    Wall: str
     Done: str
-    Failed: str
+    Fail: str
     Detail: str
 
 
-SUMMARY_HEADERS = (
-    "Simulation",
-    "Status",
-    "Folders",
-    "Latest",
-    "RateRows",
-    "SimTime_ps",
-    "TotalO2Added",
-    "MoleculesRemoved",
-    "WallTime",
-    "Done",
-    "Failed",
-    "Detail",
+# Each entry is (field_name, display_header). Field names must be valid Python
+# identifiers; display headers can use any characters (e.g. "t(ps)").
+SUMMARY_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("Sim",     "Sim"),
+    ("Status",  "Status"),
+    ("Dirs",    "Dirs"),
+    ("Latest",  "Latest"),
+    ("Rows",    "Rows"),
+    ("Time_ps", "t(ps)"),
+    ("O2Added", "O2Added"),
+    ("GasRem",  "GasRem"),
+    ("Wall",    "Wall"),
+    ("Done",    "Done"),
+    ("Fail",    "Fail"),
+    ("Detail",  "Detail"),
 )
+SUMMARY_HEADERS = tuple(Field for Field, _ in SUMMARY_COLUMNS)
+SUMMARY_DISPLAY_HEADERS = tuple(Display for _, Display in SUMMARY_COLUMNS)
 
 
 def ReadExpectedSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
@@ -349,6 +353,12 @@ def DetermineStatus(
     if FatalDetail:
         return "FAILED", "N", "Y", FatalDetail
 
+    VaspState = CheckVaspState(WorkDir, StepFolders)
+    if VaspState == "stuck":
+        return "STUCK", "N", "N", "OUTCAR empty, no VASP job submitted — restart OxidationMaster"
+    if VaspState == "queued":
+        return "RUNNING", "N", "N", "OUTCAR empty, VASP job queued"
+
     RecentActivity = LatestActivityTime(WorkDir)
     if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
         return "RUNNING", "N", "N", "recent file activity"
@@ -377,6 +387,38 @@ def LatestActivityTime(WorkDir: Path) -> Optional[float]:
     return max(Times) if Times else None
 
 
+def CheckVaspState(WorkDir: Path, StepFolders: Sequence[int]) -> Optional[str]:
+    """Detect empty-OUTCAR states using the .vasp_submitted_step sentinel.
+
+    Returns 'stuck' if OUTCAR is empty and no valid submission record exists
+    for the current nstep (simulation cannot proceed without a restart).
+    Returns 'queued' if OUTCAR is empty but the sentinel matches the current
+    nstep (VASP job was submitted and is likely waiting in the queue).
+    Returns None if OUTCAR is non-empty or no step folders exist yet.
+    """
+    if not StepFolders:
+        return None
+    OutcarPath = WorkDir / "OUTCAR"
+    if not OutcarPath.exists():
+        return None
+    try:
+        if OutcarPath.stat().st_size > 0:
+            return None
+    except OSError:
+        return None
+
+    ExpectedNstep = StepFolders[-1] + 1
+    SentinelPath = WorkDir / ".vasp_submitted_step"
+    if SentinelPath.exists():
+        try:
+            Recorded = int(SentinelPath.read_text(encoding="utf-8").strip())
+            if Recorded == ExpectedNstep:
+                return "queued"
+        except (ValueError, OSError):
+            pass
+    return "stuck"
+
+
 def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     """Build one summary row."""
     StepFolders = NumericStepFolders(WorkDir)
@@ -385,17 +427,17 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
-        Simulation=Label,
+        Sim=Label,
         Status=Status,
-        Folders=str(len(StepFolders)) if WorkDir.exists() else "-",
+        Dirs=str(len(StepFolders)) if WorkDir.exists() else "-",
         Latest=str(StepFolders[-1]) if StepFolders else "-",
-        RateRows=RateRows,
-        SimTime_ps=SimTime,
-        TotalO2Added=TotalO2Added,
-        MoleculesRemoved=MoleculesRemoved,
-        WallTime=EstimateWallTime(WorkDir, StepFolders),
+        Rows=RateRows,
+        Time_ps=SimTime,
+        O2Added=TotalO2Added,
+        GasRem=MoleculesRemoved,
+        Wall=EstimateWallTime(WorkDir, StepFolders),
         Done=Done,
-        Failed=Failed,
+        Fail=Failed,
         Detail=Detail,
     )
 
@@ -421,14 +463,13 @@ def Truncate(Value: Optional[str], MaxLen: int) -> str:
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:
     """Return a fixed-width table suitable for terminal inspection."""
-    Headers = SUMMARY_HEADERS
-    Values = [[getattr(Row, Header) for Header in Headers] for Row in Rows]
+    Values = [[getattr(Row, Field) for Field, _ in SUMMARY_COLUMNS] for Row in Rows]
     Widths = []
-    for Index, Header in enumerate(Headers):
-        Widths.append(max(len(Header), *(len(str(Row[Index])) for Row in Values)) if Values else len(Header))
+    for Index, (_, Display) in enumerate(SUMMARY_COLUMNS):
+        Widths.append(max(len(Display), *(len(str(Row[Index])) for Row in Values)) if Values else len(Display))
 
     Lines = []
-    Lines.append("  ".join(Header.ljust(Widths[Index]) for Index, Header in enumerate(Headers)))
+    Lines.append("  ".join(Display.ljust(Widths[Index]) for Index, (_, Display) in enumerate(SUMMARY_COLUMNS)))
     Lines.append("  ".join("-" * Width for Width in Widths))
     for RowValues in Values:
         Lines.append("  ".join(str(Value).ljust(Widths[Index]) for Index, Value in enumerate(RowValues)))
@@ -445,10 +486,9 @@ def WriteOutputs(RootDir: Path, Rows: Sequence[SimulationRow]) -> None:
 
     AtomicWriteText(TextPath, FormatTable(Rows))
 
-    Headers = SUMMARY_HEADERS
-    Lines = ["\t".join(Headers)]
+    Lines = ["\t".join(Display for _, Display in SUMMARY_COLUMNS)]
     for Row in Rows:
-        Lines.append("\t".join(str(getattr(Row, Header)) for Header in Headers))
+        Lines.append("\t".join(str(getattr(Row, Field)) for Field, _ in SUMMARY_COLUMNS))
     AtomicWriteText(TsvPath, "\n".join(Lines) + "\n")
 
 

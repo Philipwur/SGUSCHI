@@ -90,6 +90,30 @@ echo === Continue running with JOB $nstep ===
 @ count = 0
 @ flag_gamma = 0
 
+# Startup guard: recover from interrupted run (OUTCAR empty, no VASP running).
+# Triggered when master job was killed between `touch OUTCAR` and `$vaspcmd jobsub`.
+if ( $nstep > 1 && ! -s OUTCAR ) then
+  @ _resubmit = 1
+  if ( -e .vasp_submitted_step ) then
+    set _sub_for = `cat .vasp_submitted_step | tr -d '[:space:]'`
+    if ( "$_sub_for" == "$nstep" ) then
+      echo "WARNING volsearch_cont: OUTCAR is empty but job was recorded as submitted for step $nstep. Waiting (job may be queued)."
+      echo "If this simulation appears stuck, delete .vasp_submitted_step and restart."
+      @ _resubmit = 0
+    endif
+  endif
+  if ( $_resubmit ) then
+    echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
+    $vaspcmd jobsub >> jobsub.log
+    if ( $? != 0 ) then
+      echo "FATAL volsearch_cont: resubmission at startup failed."
+      touch $failure_marker
+      exit 1
+    endif
+    echo $nstep > .vasp_submitted_step
+  endif
+endif
+
 while ($stopflag == 0)
 
   sleep 60 ############################################################
@@ -99,6 +123,7 @@ while ($stopflag == 0)
   if (! $?) then # Job is done
 
     echo ====== JOB $nstep DONE ======
+    rm -f .vasp_submitted_step
 
     @ natom = `grep 'NIONS =' OUTCAR | tail -1 | awk '{print $12}'`
     echo $natom > natom
@@ -551,7 +576,8 @@ while ($stopflag == 0)
         exit 1
       endif
       set nstep = `expr $nstep + 1`
-      echo Job $nstep submitted. Waiting for job $nstep to finish... 
+      echo $nstep > .vasp_submitted_step
+      echo Job $nstep submitted. Waiting for job $nstep to finish...
     endif
   endif
   endif
