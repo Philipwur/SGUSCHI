@@ -68,6 +68,11 @@ PrepareWorkPlace
 Requirements.txt
 + Add it
 
+Testing
++ Snapshot (golden-file) tests for VaspIO parsers using real OUTCAR/POSCAR files trimmed to a few ionic steps — covers real atom counts and element ordering that synthetic 3-atom fixtures miss.
++ End-to-end OxidationStep smoke test pointing at a trimmed real example directory, run in TestCase=True mode, asserting no exceptions and spot-checking key outputs (GasFraction in [0,1], atom count stable when no O2 added, etc.).
++ Store trimmed fixture files (3-frame OUTCAR, real POSCAR) in src/test/fixtures/.
+
 SLUSCHI_mod
 + Change .sluschi.rc / make so that there is a sluschipath2/sguschipath, then you can install both sluschi and sguschi without conflict. Make sure all references to sluschipath are changed to sluschipath2 or sguschipath
 + make it such that volsearch_cont stops when OxidationStep raises an exception
