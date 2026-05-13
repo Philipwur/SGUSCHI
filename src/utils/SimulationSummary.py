@@ -345,19 +345,19 @@ def DetermineStatus(
 
     FailedMarker = WorkDir / "sguschi_failed"
     DoneMarker = WorkDir / "volsearch_is_done"
+    VaspState = CheckVaspState(WorkDir, StepFolders)
 
-    if FailedMarker.exists():
-        return "FAILED", "N", "Y", "sguschi_failed"
     if DoneMarker.exists():
         return "DONE", "Y", "N", "volsearch_is_done"
+    if VaspState == "queued":
+        return "RUNNING", "N", "N", "OUTCAR empty, VASP job queued"
+    if FailedMarker.exists():
+        return "FAILED", "N", "Y", "sguschi_failed"
     if FatalDetail:
         return "FAILED", "N", "Y", FatalDetail
 
-    VaspState = CheckVaspState(WorkDir, StepFolders)
     if VaspState == "stuck":
         return "STUCK", "N", "N", "OUTCAR empty, no VASP job submitted — restart OxidationMaster"
-    if VaspState == "queued":
-        return "RUNNING", "N", "N", "OUTCAR empty, VASP job queued"
 
     RecentActivity = LatestActivityTime(WorkDir)
     if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:

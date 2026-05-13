@@ -1,6 +1,8 @@
 #!/bin/csh
 
 set failure_marker = sguschi_failed
+set submission_marker = .vasp_submitted_step
+set submission_log = .vasp_submit_last.out
 rm -f $failure_marker
 
 set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
@@ -94,23 +96,32 @@ echo === Continue running with JOB $nstep ===
 # Triggered when master job was killed between `touch OUTCAR` and `$vaspcmd jobsub`.
 if ( $nstep > 1 && ! -s OUTCAR ) then
   @ _resubmit = 1
-  if ( -e .vasp_submitted_step ) then
-    set _sub_for = `cat .vasp_submitted_step | tr -d '[:space:]'`
+  if ( -e $submission_marker ) then
+    set _sub_for = `cat $submission_marker | tr -d '[:space:]'`
     if ( "$_sub_for" == "$nstep" ) then
       echo "WARNING volsearch_cont: OUTCAR is empty but job was recorded as submitted for step $nstep. Waiting (job may be queued)."
-      echo "If this simulation appears stuck, delete .vasp_submitted_step and restart."
+      echo "If this simulation appears stuck, delete $submission_marker and restart."
       @ _resubmit = 0
     endif
   endif
   if ( $_resubmit ) then
     echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
-    $vaspcmd jobsub >> jobsub.log
-    if ( $? != 0 ) then
-      echo "FATAL volsearch_cont: resubmission at startup failed."
-      touch $failure_marker
-      exit 1
+    echo $nstep > $submission_marker
+    rm -f $submission_log
+    $vaspcmd jobsub >>& $submission_log
+    set submit_status = $?
+    cat $submission_log >> jobsub.log
+    if ( $submit_status != 0 ) then
+      grep -qi "Socket timed out" $submission_log
+      if ( $? == 0 ) then
+        echo "WARNING volsearch_cont: startup resubmission timed out after Slurm may have accepted the job. Waiting for job $nstep."
+      else
+        rm -f $submission_marker
+        echo "FATAL volsearch_cont: resubmission at startup failed."
+        touch $failure_marker
+        exit 1
+      endif
     endif
-    echo $nstep > .vasp_submitted_step
   endif
 endif
 
@@ -123,7 +134,7 @@ while ($stopflag == 0)
   if (! $?) then # Job is done
 
     echo ====== JOB $nstep DONE ======
-    rm -f .vasp_submitted_step
+    rm -f $submission_marker
 
     @ natom = `grep 'NIONS =' OUTCAR | tail -1 | awk '{print $12}'`
     echo $natom > natom
@@ -569,14 +580,24 @@ while ($stopflag == 0)
         exit 1
       endif
 
-      $vaspcmd jobsub >> jobsub.log
-      if ( $? != 0 ) then
-        echo FATAL volsearch_cont: job submission command failed.
-        touch $failure_marker
-        exit 1
+      set nextstep = `expr $nstep + 1`
+      echo $nextstep > $submission_marker
+      rm -f $submission_log
+      $vaspcmd jobsub >>& $submission_log
+      set submit_status = $?
+      cat $submission_log >> jobsub.log
+      if ( $submit_status != 0 ) then
+        grep -qi "Socket timed out" $submission_log
+        if ( $? == 0 ) then
+          echo WARNING volsearch_cont: job submission timed out after Slurm may have accepted the job. Waiting for job $nextstep.
+        else
+          rm -f $submission_marker
+          echo FATAL volsearch_cont: job submission command failed.
+          touch $failure_marker
+          exit 1
+        endif
       endif
-      set nstep = `expr $nstep + 1`
-      echo $nstep > .vasp_submitted_step
+      set nstep = $nextstep
       echo Job $nstep submitted. Waiting for job $nstep to finish...
     endif
   endif
