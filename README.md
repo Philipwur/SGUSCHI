@@ -1,87 +1,90 @@
-SGUSCHI is a fork of SLUSCHI for simulating a pure $O2$ oxidation environment using the small-cell methodology.
+# SGUSCHI
 
-Steps to install / run
-1. Pull Directory
-2. run make in sluschimod
-3. chmod +x * in sluschimod
-4. Add required files to a folder (INCAR, POTCAR, POSCAR (supercell), jobsub, job.in (SLUSCHI), KPOINTS, OxidationMaster (Soon will be done automatically), OxParams, CovalentRadii to folder)
-5. Run PrepareWorkPlace.py in folder (if Dry run (currently only implemented)
-then run first job in each Dir_VolSearch folder)
-5.5 Submit a sbatch jobsub in every Dir_VolSearch folder created
-6. Customise OxidationMaster. Wait for first wave of jobs to finish.
-7. Submit OxidationMaster job. Resubmit it runs out. 
+**SGUSCHI** (Solid-Gas in Ultra Small Coexistence with Hovering Interfaces) is a fork of [SLUSCHI](https://github.com/qjhong/SLUSCHI) for simulating pure O₂ oxidation environments using the small-cell methodology. It couples the SLUSCHI Fortran MD orchestrator with a Python analysis layer: every 80 VASP MD steps, the Python layer detects and removes non-O₂ gas molecules, tracks the void fraction, and conditionally inserts new O₂ molecules based on an exponentially smoothed count. Outputs gas management and xyz data for easy analysis.
 
-## To-Do
+## Requirements
 
-! HIGH PRIO
-> Create manual management of O,Zr,C tracking to not accidentalyl add C to gas phase (what happened in daic)
+- **Python** ≥ 3.8 with `numpy`, `pandas`, `scipy`
+- **VASP** (tested with standard and MLFF modes)
+- **Fortran compiler** (gfortran or ifort) to build the SLUSCHI binary
+- **Job scheduler**: tested on **Slurm** and **PBS Torque**
+- Optional (postprocessing): `plotly`, `tqdm`
 
-Add TestCase to ReadMe
+## Installation
 
-Add Pressure method to postprocessing from Devarea.
+```bash
+# Build the Fortran orchestrator
+cd src/dependencies/SLUSCHI_mod
+make
+chmod +x *
 
-Important, fix indexing checks on oxidationstep. Current 'expecting to read print' is correct. Make check more thorough somehow. 
-+ VolSearch requires a folder where all old sims are in their folders, and new sim has yet to be moved into new folder
-+ Look for error file (if job fails), restart job with a bit of extra time (keep track somehow, make new Python workflow for adding some extra time realtive to last attempted) and remove error file. Once this failed job is done, go back to originally given time.
+# Install Python dependencies
+pip install numpy pandas scipy
+```
 
-OxidationStep 
-+ Create a better logging system in RootDir (some kind of table which gets updated)
-+ Maybe also log CPU hours / GPU hours per job (make it optional in case job is not run on slurm)
-+ Add check for radii, POTCAR, POSCAR cohesion (this can only work if runtime is vasp)
+## Quick Start
 
-SLUSCHI source
-+ Add Hard stop to volsearch_cont if OxidationStep fails
+The `example/` directory contains a ready-to-use starting point, with empty POTCAR. See `example/note.md` for a walkthrough. The general steps are:
 
-    Something like:
+1. Prepare a folder containing: `POSCAR` (supercell, no O atoms or gas fraction), `POTCAR`, `INCAR`, `KPOINTS`, `job.in`, `jobsub`, `OxParams`, `CovalentRadii`. See SLUSCHI documentation for description of job.in parameters, generally recommended not to touch it too much.
+2. Run `PrepareWorkplace.py` from that folder (found in `src/preprocessing/`). This creates a `{Temperature}_{SimIndex}/` directory tree.
+3. Submit an initial VASP job in each `Dir_VolSearch/` subfolder (e.g. `sbatch jobsub`).
+4. Submit the `OxidationMaster` job. Resubmit as needed until simulations reach sufficient length.
+5. Results are written to `xyz_files/`.
 
-    ```
-    ! 1. Declare a variable to hold the status
-    Integer :: PythonExitStatus
-    
-    ! 2. Replace your current call with this:
-    Call Execute_Line_Command("python NameOfScript.py", Wait=.True., Exitstat=PythonExitStatus)
-    
-    ! 3. Add the logic to stop the program
-    If (PythonExitStatus /= 0) Then
-        Write(*,*) "Error: Python script encountered a problem. Stopping Fortran."
-        Stop
-    End If
-    ```
+## Configuration Reference
 
-PrepareWorkPlace
-+ PrepareWorkPlace to check POTCAR, POSCAR, CovalentRadii to see that they all match
-+Prepareworkplace should run the first job so volsearch_cont works
-+ PrepareWorkPlace to read job.in for job submission command
-+ PrepareWorkPlace to create template OxidationMaster (see template)
-+ PrepareWorkPlace should ensure INCAR nsw is set to 80
-+ make job.in steps 10000000!
-+ Add Error file if job fails in jobsub
+### OxParams
 
-Requirements.txt
-+ Add it
+| Key | Description |
+|-----|-------------|
+| `AtomicRadiusTol` | Multiplier applied to the sum of covalent radii for bond detection |
+| `O2Tol` | Target O₂ count per unit void fraction |
+| `OSmoothing` | Exponential smoothing factor α for O₂ count (default 0.001; heavily history-weighted) |
+| `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
+| `InitO2Count` | Number of O₂ molecules placed at initialisation |
+| `Temperatures` | List of simulation temperatures in K |
+| `NSims` | Number of parallel simulation replicas per temperature |
 
-SLUSCHI_mod
-+ Change .sluschi.rc / make so that there is a sluschipath2/sguschipath, then you can install both sluschi and sguschi without conflict. Make sure all references to sluschipath are changed to sluschipath2 or sguschipath
-+ make it such that volsearch_cont stops when OxidationStep raises an exception
+### CovalentRadii
 
-utils/Rollback.py
-+ Change Rollback to use last step of outcar, so rollback can handle cases where 
-  gases were removed/added
+Plain text file, one entry per line: `Element = radius_in_Angstroms`. Supports `#` and `!` comments.
 
+### INCAR (required settings)
 
+| Tag | Value | Reason |
+|-----|-------|--------|
+| `IBRION` | `0` | Molecular dynamics mode |
+| `ISIF` | `2` | Fixed cell shape; ions relax |
+| `NSW` | `80` | Steps per SLUSCHI cycle (overridden at runtime; do not change here) |
 
-Misc.
-+ Re-do GPU container to include pmi2 so it can be spread across nodes.
+### job.in
 
---low prio TODO--
+SLUSCHI volume-search configuration. Set `thmexp_only = 1` to skip melt and coexistence calculations and run volume search only.
 
-OxidationStep
-+ Add more runtime checks to ensure things are running smoothly
+## Architecture
 
-OxidationPreProcessing
-+ Add Supercell generation
-+ Add SQS (Read Paper first)
+SGUSCHI wraps the SLUSCHI volume-search loop. After every 80 MD steps, the Fortran binary hands control to Python, which updates the gas environment and returns:
 
-BUG:
+```
+SLUSCHI Fortran binary (volsearch_cont)
+    └─ every 80 MD steps → python OxidationStep.py
+            ├─ Reads:  POSCAR, {LatestFolder}/OUTCAR, OxParams, CovalentRadii, RateAnalysis.csv
+            ├─ Calls OxidationAnalysis: gas detection, smoothing, O2 placement logic
+            ├─ Writes: updated POSCAR, RateAnalysis.csv, XYZ trajectory
+            └─ Returns control to Fortran for next 80 steps
+```
 
-Outcar gets randomly removed sometimes. I think this is a sluschi thing
+If `OxidationStep.py` exits with a non-zero status, `volsearch_cont` halts immediately and writes a failure marker file.
+
+## Known Limitations
+
+1. **Material system**: Void-fraction tracking uses Zr atoms as the solid reference. The code has been tested on **cubic Zr refractory materials** (e.g. ZrC, ZrN) in a pure O₂ environment only.
+2. **Structure geometry**: Cubic bulk structures only. The origin-shifting heuristic in `OxidationPreprocessing.py` assumes roughly equal inter-atom spacing; non-cubic and slab geometries are not supported.
+3. **Cell orientation**: The gas void region must lie along the **x-axis** (first lattice vector). Gas fraction tracking, O₂ placement, and surface area calculations all assume this orientation.
+4. **Gas addition**: Only **pure O₂** can be added. The O–O bond length is hardcoded to 1.2 Å and velocities are drawn from a Maxwell–Boltzmann distribution for two O atoms.
+5. **Gas removal**: Only molecules of **2–3 atoms** are detected (`MinimumComplexity=2`, `MaximumComplexity=3`). All detected non-O₂ molecules are removed each cycle.
+6. **Oxygen in base structure**: The base POSCAR must not contain oxygen atoms. This combination has not been tested.
+7. **Fixed cell**: Cell shape and volume are fixed during MD (`ISIF=2`). Variable-cell MD is not supported.
+8. **MD cycle length**: One Python cycle runs every **80 VASP MD steps**. This is enforced by `volsearch_cont` at runtime and cannot be changed by editing `INCAR` or `job.in` alone; the SLUSCHI script source must be modified.
+9. **Elemental masses**: Velocity initialisation covers O, C, Zr, and N only. Additional elements must be manually added to the mass dictionary in `src/workflow/OxidationAnalysis.py`.

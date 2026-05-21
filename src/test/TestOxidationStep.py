@@ -129,6 +129,9 @@ def MakeWorkDir(TmpPath: Path) -> Path:
     Root = TmpPath / "Root"
     WorkDir = Root / "TrajA" / "Dir_VolSearch"
     WorkDir.mkdir(parents=True)
+    StepDir = WorkDir / "1"
+    StepDir.mkdir()
+    (StepDir / "OUTCAR").write_text("", encoding="utf-8")
 
     WriteRootInputs(Root)
 
@@ -139,6 +142,38 @@ def MakeWorkDir(TmpPath: Path) -> Path:
     Vio.WritePoscar(WorkDir, Positions, Cell, Velocities)
 
     return WorkDir
+
+
+def TestValidateOutcarDataRejectsUnknownElements(TmpPath: Path) -> None:
+    """Parsed OUTCAR frames containing X should fail before analysis mutates files."""
+    OutcarPath = TmpPath / "OUTCAR"
+    Frame = pd.DataFrame(
+        {
+            "Element": ["Zr", "X"],
+            "x": [0.0, 0.5],
+            "y": [0.0, 0.5],
+            "z": [0.0, 0.5],
+        }
+    )
+    OutcarData = {
+        "Temperature": 1000.0,
+        "TimesFs": [1.0],
+        "Positions": [Frame],
+    }
+
+    with pytest.raises(ValueError, match="unresolved element labels"):
+        Ox.ValidateOutcarData(OutcarData, OutcarPath)
+
+
+def TestOxidationStepFailsWhenExpectedFolderMissing(TmpPath: Path) -> None:
+    """The workflow should not continue when RateAnalysis points to a missing job folder."""
+    WorkDir = MakeWorkDir(TmpPath)
+    MissingFolder = WorkDir / "1"
+    (MissingFolder / "OUTCAR").unlink()
+    MissingFolder.rmdir()
+
+    with pytest.raises(FileNotFoundError, match="Expected completed job folder"):
+        Ox.main(WorkDir, TestCase=True)
 
 
 def TestOxidationStepTestCaseTrueWritesTestOut(

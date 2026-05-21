@@ -471,6 +471,7 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
     FilePath = WorkDir if (WorkDir.is_file() and WorkDir.name == "OUTCAR") else (WorkDir / "OUTCAR")
     if not FilePath.exists():
         raise FileNotFoundError("OUTCAR not found at: {}".format(FilePath))
+    OutcarDir = FilePath.parent
 
     # Read OUTCAR
     OutcarText = FilePath.read_text(encoding="utf-8", errors="ignore")
@@ -533,38 +534,37 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
     if TypesExpected and len(Species) >= TypesExpected:
         Species = Species[:TypesExpected]
 
-    # Fallback: if still mismatched, try reading POSCAR symbols and counts (VASP5-style)
-    if TypesExpected and len(Species) != TypesExpected:
-        PoscarPath = WorkDir / "POSCAR"
+    # Fallback: if still mismatched, read the archived POSCAR with the same parser
+    # used elsewhere in the workflow.
+    if (not Counts) or (TypesExpected and len(Species) != TypesExpected):
+        PoscarPath = OutcarDir / "POSCAR"
         if PoscarPath.exists():
-            with open(PoscarPath, "r", encoding="utf-8", errors="ignore") as F:
-                PosLines = [Ln.strip() for Ln in F.readlines()[:12]]
-            # Comment line usually carries symbols, counts are the first all-integer line after lattice
-            CommentTokens: List[str] = PosLines[0].split() if PosLines else []
-            SpeciesFromPoscar: List[str] = []
-            for Tok in CommentTokens:
-                M = re.match(r"([A-Z][a-z]?)", Tok)
-                if M:
-                    SpeciesFromPoscar.append(M.group(1))
-            CountsFromPoscar: Optional[List[int]] = None
-            for Ln in PosLines[5:12]:
-                if re.fullmatch(r"(?:\d+\s+)+\d+", Ln):
-                    CountsFromPoscar = [int(X) for X in Ln.split()]
-                    break
-            if SpeciesFromPoscar and CountsFromPoscar and len(SpeciesFromPoscar) == len(CountsFromPoscar):
-                Species = SpeciesFromPoscar
-                Counts = CountsFromPoscar
-                TypesExpected = len(Counts)
+            try:
+                PoscarPosition, _ = ReadPoscar(OutcarDir, FileName="POSCAR")
+            except Exception:
+                PoscarPosition = pd.DataFrame()
+            if not PoscarPosition.empty and "Element" in PoscarPosition.columns:
+                SpeciesFromPoscar = list(dict.fromkeys(PoscarPosition["Element"].tolist()))
+                CountsFromPoscar = [
+                    int((PoscarPosition["Element"] == El).sum())
+                    for El in SpeciesFromPoscar
+                ]
+                if len(SpeciesFromPoscar) == len(CountsFromPoscar):
+                    Species = SpeciesFromPoscar
+                    Counts = CountsFromPoscar
+                    TypesExpected = len(Counts)
 
     # Build per-atom labels
     ElementsExpanded: List[str] = []
     if Species and Counts and len(Species) == len(Counts):
         for El, Cnt in zip(Species, Counts):
             ElementsExpanded.extend([El] * Cnt)
-    elif Nions:
-        # As a last resort, avoid silent mislabeling: keep 'X' but log sizes for debugging
-        # print(f"[WARN] Could not align species and counts. Species={Species}, Counts={Counts}, NIONS={Nions}")
-        ElementsExpanded = ["X"] * Nions
+    if Nions and len(ElementsExpanded) != Nions:
+        raise ValueError(
+            "Could not resolve OUTCAR element labels for {}. Species={}, Counts={}, NIONS={}.".format(
+                FilePath, Species, Counts, Nions
+            )
+        )
 
     # --- Cell (ISIF=2 → fixed cell). Parse the first 'direct lattice vectors' block ---
     def ParseFirstCell(OutcarLines: List[str]) -> Optional[pd.DataFrame]:
@@ -674,7 +674,12 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         if ElementsExpanded and len(ElementsExpanded) == len(Position):
             Position.insert(0, "Element", ElementsExpanded)
         else:
-            Position.insert(0, "Element", ["X"] * len(Position))
+            raise ValueError(
+                "OUTCAR position count does not match element labels in {}: "
+                "{} positions vs {} labels.".format(
+                    FilePath, len(Position), len(ElementsExpanded)
+                )
+            )
         Positions.append(Position)
 
         # Max force magnitude

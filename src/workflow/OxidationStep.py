@@ -155,6 +155,40 @@ def CheckSimulationEnvironment(WorkDir: Path) -> None:
         #if RateAnalysisSize != LatestFolder:
         #    raise ValueError('RateAnalysis.csv entries still do not match Dir_VolSearch after Fix utilities.\nFATAL: RollBack required.')
     #
+ 
+
+def ValidateNoUnknownElements(Position: pd.DataFrame, Context: str) -> None:
+    """Fail before bonding logic sees unresolved element labels."""
+    if "Element" not in Position.columns:
+        raise ValueError(f"{Context} is missing an Element column.")
+
+    Elements = Position["Element"].astype(str).str.strip()
+    Unknown = sorted(set(Elements[(Elements == "") | (Elements == "X")].tolist()))
+    if Unknown:
+        raise ValueError(f"{Context} contains unresolved element labels: {Unknown}.")
+
+
+def ValidateOutcarData(OutcarData: dict, OutcarPath: Path) -> None:
+    """Validate parsed OUTCAR data before any workflow files are mutated."""
+    Positions = OutcarData.get("Positions")
+    TimesFs = OutcarData.get("TimesFs")
+
+    if not Positions:
+        raise ValueError(f"No positions parsed from {OutcarPath}.")
+    if not TimesFs:
+        raise ValueError(f"No ionic step times parsed from {OutcarPath}.")
+    if len(TimesFs) != len(Positions):
+        raise ValueError(
+            f"Parsed OUTCAR times/positions mismatch for {OutcarPath}: "
+            f"{len(TimesFs)} times vs {len(Positions)} frames."
+        )
+
+    for FrameIndex, FramePosition in enumerate(Positions, start=1):
+        ValidateNoUnknownElements(
+            FramePosition,
+            f"OUTCAR frame {FrameIndex} in {OutcarPath}"
+        )
+
 
 def main(WorkDir = None, TestCase = False):
     
@@ -234,20 +268,32 @@ def main(WorkDir = None, TestCase = False):
                                      }])
     
     LatestFolder = len(RateAnalysis) #Prudent to add manual check of folder count
+    LatestFolderPath = WorkDir / str(LatestFolder)
+    if not LatestFolderPath.is_dir():
+        raise FileNotFoundError(
+            f"Expected completed job folder {LatestFolderPath} does not exist."
+        )
     print(f'Expecting to read folder {LatestFolder}')
     #------------------------- Gather Run Information -------------------------
 
 
     #Read POSCAR of last jobs (in working directory)
     #Edited by SLUSCHI, build next POSCAR from this one
-    Position, CellDim, Velocity = vio.ReadPoscar(WorkDir, 
-                                                 GiveVelocities = True)
+    PoscarData = vio.ReadPoscar(WorkDir, GiveVelocities = True)
+    if len(PoscarData) != 3:
+        raise ValueError(f"POSCAR in {WorkDir} does not contain velocities.")
+    Position, CellDim, Velocity = PoscarData
     
     #Rename Elements in case of corruption
     Position = vio.FixElementFormatting(Position)
-    OutcarData = vio.OutcarParser(WorkDir / str(LatestFolder))
+    ValidateNoUnknownElements(Position, f"POSCAR in {WorkDir}")
+
+    OutcarData = vio.OutcarParser(LatestFolderPath)
+    ValidateOutcarData(OutcarData, LatestFolderPath / "OUTCAR")
 
     Temperature = OutcarData['Temperature']
+    if Temperature is None:
+        raise ValueError(f"No target temperature parsed from {LatestFolderPath / 'OUTCAR'}.")
     SimTime = OutcarData['TimesFs'][-1]
     
     
@@ -409,7 +455,11 @@ if __name__ == '__main__':
     # Check for 'test' argument for file changes
     TestMode = 'test' in [Arg.lower() for Arg in sys.argv]
     
-    main(WorkDir, TestCase = TestMode)
+    try:
+        main(WorkDir, TestCase = TestMode)
+    except Exception as Exc:
+        print(f"FATAL OxidationStep failed in {WorkDir}: {Exc}", file=sys.stderr)
+        raise
     
     #Trial Fixing RateAnalysis
     #WorkDir = 'SLUSCHI_Oxidation_Test_25_1273K_10O_1/Dir_VolSearch' #use for demos     
