@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import ast
 import csv
+import datetime
 import os
 import re
 import subprocess
@@ -208,11 +209,16 @@ def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str, str, str]:
 
 
 def CountRemovedMolecules(Rows: Sequence[Dict[str, str]], FieldNames: Sequence[str]) -> str:
-    """Count removed molecule entries from the Gas Removed column."""
+    """Count removed molecule entries from the Gas Removed column.
+
+    Skips malformed individual rows rather than failing the entire count.
+    Appends '?' to the result if any rows were unparseable.
+    """
     if "Gas Removed" not in FieldNames:
         return "-"
 
     Total = 0
+    Skipped = 0
     for Row in Rows:
         Raw = Row.get("Gas Removed")
         if Raw in (None, ""):
@@ -220,15 +226,22 @@ def CountRemovedMolecules(Rows: Sequence[Dict[str, str]], FieldNames: Sequence[s
         try:
             Removed = ast.literal_eval(Raw)
         except (SyntaxError, ValueError, TypeError):
-            return "-"
+            Skipped += 1
+            continue
         if not isinstance(Removed, (list, tuple)):
-            return "-"
+            Skipped += 1
+            continue
+        Valid = True
         for Molecule in Removed:
             if not isinstance(Molecule, (list, tuple)):
-                return "-"
-        Total += len(Removed)
+                Valid = False
+                break
+        if Valid:
+            Total += len(Removed)
+        else:
+            Skipped += 1
 
-    return str(Total)
+    return f"{Total}?" if Skipped else str(Total)
 
 
 def FormatFloat(Value: str) -> str:
@@ -285,30 +298,34 @@ def ReadTail(PathFile: Path, MaxBytes: int = 32768) -> str:
 
 
 def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
-    """Estimate wall-clock span from step folders and marker/log timestamps."""
+    """Estimate wall-clock span from step folders and marker/log timestamps.
+
+    Uses st_ctime (creation time on Windows, inode-change time on POSIX) as an
+    additional lower-bound anchor to improve stability on OneDrive-synced paths
+    where mtime can be reset on re-sync.
+    """
     Times: List[float] = []
 
-    for Step in StepFolders:
-        StepPath = WorkDir / str(Step)
+    def AddStat(PathFile: Path) -> None:
         try:
-            Times.append(StepPath.stat().st_mtime)
+            Stat = PathFile.stat()
+            Times.append(Stat.st_mtime)
+            if Stat.st_ctime < Stat.st_mtime:
+                Times.append(Stat.st_ctime)
         except OSError:
             pass
+
+    for Step in StepFolders:
+        AddStat(WorkDir / str(Step))
 
     for Name in ("volsearch_is_done", "sguschi_failed", "RateAnalysis.csv", "jobsub.log"):
         PathFile = WorkDir / Name
         if PathFile.exists():
-            try:
-                Times.append(PathFile.stat().st_mtime)
-            except OSError:
-                pass
+            AddStat(PathFile)
 
     ParentLog = WorkDir.parent / "log.out"
     if ParentLog.exists():
-        try:
-            Times.append(ParentLog.stat().st_mtime)
-        except OSError:
-            pass
+        AddStat(ParentLog)
 
     if len(Times) < 2:
         return "-"
@@ -372,7 +389,7 @@ def DetermineStatus(
 def LatestActivityTime(WorkDir: Path) -> Optional[float]:
     """Return latest mtime for files/folders relevant to the simulation."""
     Times: List[float] = []
-    for Name in ("RateAnalysis.csv", "jobsub.log"):
+    for Name in ("OUTCAR", "RateAnalysis.csv", "jobsub.log"):
         PathFile = WorkDir / Name
         if PathFile.exists():
             try:
@@ -465,12 +482,15 @@ def Truncate(Value: Optional[str], MaxLen: int) -> str:
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:
     """Return a fixed-width table suitable for terminal inspection."""
+    Now = datetime.datetime.now(datetime.timezone.utc)
+    Header = f"Generated: {Now.strftime('%Y-%m-%d %H:%M:%S')} UTC   ({len(Rows)} simulations)"
+
     Values = [[getattr(Row, Field) for Field, _ in SUMMARY_COLUMNS] for Row in Rows]
     Widths = []
     for Index, (_, Display) in enumerate(SUMMARY_COLUMNS):
         Widths.append(max(len(Display), *(len(str(Row[Index])) for Row in Values)) if Values else len(Display))
 
-    Lines = []
+    Lines = [Header, ""]
     Lines.append("  ".join(Display.ljust(Widths[Index]) for Index, (_, Display) in enumerate(SUMMARY_COLUMNS)))
     Lines.append("  ".join("-" * Width for Width in Widths))
     for RowValues in Values:
@@ -530,9 +550,13 @@ def WriteSummaryOnce(
     RootDir: Path,
     OxParamsPath: Optional[Path] = None,
     Quiet: bool = False,
+    PrintOnly: bool = False,
 ) -> None:
     """Build and write one summary refresh."""
     Rows = BuildSummary(RootDir, OxParamsPath)
+    if PrintOnly:
+        print(FormatTable(Rows), end="")
+        return
     WriteOutputs(RootDir, Rows)
     if not Quiet:
         print(f"Wrote {RootDir / SUMMARY_TXT}")
@@ -689,6 +713,11 @@ def ParseArgs(Args: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Suppress normal status output.",
     )
     Parser.add_argument(
+        "--stdout",
+        action="store_true",
+        help="Print the summary table to stdout instead of writing files.",
+    )
+    Parser.add_argument(
         "--parent-pid",
         type=int,
         default=None,
@@ -720,7 +749,7 @@ def Main(Args: Optional[Sequence[str]] = None) -> int:
             Parsed.parent_pid,
         )
 
-    WriteSummaryOnce(RootDir, OxParamsPath, Parsed.quiet)
+    WriteSummaryOnce(RootDir, OxParamsPath, Parsed.quiet, Parsed.stdout)
     return 0
 
 

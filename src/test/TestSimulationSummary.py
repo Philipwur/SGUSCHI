@@ -234,7 +234,11 @@ def TestMissingGasRemovedColumnLeavesRemovedTotalBlank(RootDir: Path) -> None:
 
 
 def TestMalformedGasRemovedColumnDoesNotCrash(RootDir: Path) -> None:
-    """Malformed Gas Removed values should leave removed total blank."""
+    """Malformed Gas Removed rows should be skipped; valid rows are still counted.
+
+    One valid row ([]) counts 0 molecules; one unparseable row is skipped.
+    The result is '0?' — a partial count with '?' signalling incomplete parsing.
+    """
     WorkDir = MakeWorkDir(RootDir, "1273_7")
     (WorkDir / "1").mkdir()
     (WorkDir / "RateAnalysis.csv").write_text(
@@ -246,7 +250,7 @@ def TestMalformedGasRemovedColumnDoesNotCrash(RootDir: Path) -> None:
 
     assert Row.RateRows == "2"
     assert Row.TotalO2Added == "12"
-    assert Row.MoleculesRemoved == "-"
+    assert Row.MoleculesRemoved == "0?"
 
 
 def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
