@@ -25,9 +25,8 @@ The following files must exist before running this script:
 5. INCAR           → VASP INCAR input
 6. job.in          → SLUSCHI job file
 7. jobsub          → SLURM job submission script
-8. CovalentRadii   → File containing Covalent radii for elements for bonding 
+8. CovalentRadii   → File containing Covalent radii for elements for bonding
                      algorithm. Give in Angstroms.
-9. jobsub_master   → Master process slurm job submission script
 """
 
 from pathlib import Path
@@ -36,14 +35,13 @@ import shutil
 import subprocess
 import ast
 import sys
-from typing import List  
+from typing import List, Optional, Tuple
 
 # --- Make imports location-independent ---
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
 import OxidationPreprocessing as opp
-# from workflow import OxidationAnalysis as an
 
 
 def MakeFolderTag(folder_name: str) -> str:
@@ -80,56 +78,58 @@ def WriteTextFile(FilePath: Path, Text: str):
     FilePath.parent.mkdir(parents=True, exist_ok=True)
     with FilePath.open("w", encoding="utf-8") as F:
         F.write(Text)
-        
 
-def PrepareWorkingDirectory():
-    
-    WorkDir = Path.cwd()
 
-    #K required in OxParams
-    RequiredKeys = [
-        'Temperatures',
-        'NSims',
-        'GasRatio',
-        'InitO2Count'
-    ]
-    
-    # 1) Read and validate OxParams and input files
-    OxParamsPath = WorkDir / "OxParams"
-    Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys = RequiredKeys)
+def SetupWorkspace(
+    WorkDir: Path,
+    Params: dict,
+    OnlySimIndices: Optional[List[Tuple[int, int]]] = None,
+) -> List[str]:
+    """Set up simulation folders from OxParams. Returns log lines.
 
+    OnlySimIndices: optional list of (Temp, SimIdx) pairs to set up.
+    If None, sets up all combinations from Params.
+    Per-folder idempotent: folders where Dir_VolSearch already exists are skipped.
+    """
     RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
     EnsureFilesExist(WorkDir, RequiredFiles)
 
-    # Load the baseline POSCAR once (Position, CellDim will be mutated per sim)
     Position, CellDim = vio.ReadPoscar(WorkDir)
 
-    # Read the base jobsub content once
     JobsubBasePath = WorkDir / "jobsub"
     with JobsubBasePath.open("r", encoding="utf-8") as F:
         JobsubBaseContent = F.read()
 
     LogLines = []
-    LogLines.append("Working Directory Prepared Sucessfully")
+    LogLines.append("Working Directory Prepared Successfully")
 
-    Temperatures = ast.literal_eval(Params[RequiredKeys[0]])
-    NSims = int(Params[RequiredKeys[1]])
-    GasRatio = float(Params[RequiredKeys[2]])
-    InitO2 = int(Params[RequiredKeys[3]])
+    Temperatures = ast.literal_eval(Params["Temperatures"])
+    NSims = int(Params["NSims"])
+    GasRatio = float(Params["GasRatio"])
+    InitO2 = int(Params["InitO2Count"])
 
     ForCopy = ["POTCAR", "job.in", "KPOINTS", "INCAR"]
 
     for Temp in Temperatures:
         for SimIdx in range(1, NSims + 1):
+            if OnlySimIndices is not None and (Temp, SimIdx) not in OnlySimIndices:
+                continue
+
             FolderName = "{}_{}".format(Temp, SimIdx)
             SimDir = WorkDir / FolderName
+            VolSearchDir = SimDir / "Dir_VolSearch"
+
+            if VolSearchDir.exists():
+                LogLines.append("[{}] already exists — skipped".format(FolderName))
+                continue
+
             SimDir.mkdir(parents=True, exist_ok=True)
 
-            # 2) Copy files into sim folder
+            # Copy files into sim folder
             for FN in ForCopy:
                 CopyFile(WorkDir / FN, SimDir / FN)
 
-            # --- Update TEBEG / TEEND in INCAR to match folder temp ---
+            # Update TEBEG / TEEND in INCAR to match folder temp
             IncarPath = SimDir / "INCAR"
             if IncarPath.exists():
                 with IncarPath.open("r", encoding="utf-8") as F:
@@ -153,25 +153,23 @@ def PrepareWorkingDirectory():
                 with IncarPath.open("w", encoding="utf-8") as F:
                     F.writelines(NewLines)
 
-            # --- Update 'temp = ...' in job.in to match folder temp ---
+            # Update 'temp = ...' in job.in to match folder temp
             JobInPath = SimDir / "job.in"
             if JobInPath.exists():
                 with JobInPath.open("r", encoding="utf-8") as F:
                     JobInText = F.read()
 
-                Pattern = re.compile(
+                TempPattern = re.compile(
                     r"^(\s*#?\s*)(temp)(\s*=\s*)([^#\n]*)(.*)$",
                     re.IGNORECASE | re.MULTILINE
                 )
 
-                def _Repl(M):
-                    Prefix = M.group(1)
-                    Key = M.group(2)  # preserve original key case
-                    Eq = M.group(3)
-                    Trailing = M.group(5)
-                    return "{}{}{}{}{}".format(Prefix, Key, Eq, str(Temp), Trailing)
+                def _ReplTemp(M):
+                    return "{}{}{}{}{}".format(
+                        M.group(1), M.group(2), M.group(3), str(Temp), M.group(5)
+                    )
 
-                JobInNew = Pattern.sub(_Repl, JobInText)
+                JobInNew = TempPattern.sub(_ReplTemp, JobInText)
 
                 with JobInPath.open("w", encoding="utf-8") as F:
                     F.write(JobInNew)
@@ -181,56 +179,99 @@ def PrepareWorkingDirectory():
             JobsubContent = UpdateJobName(JobsubBaseContent, FolderTag)
             WriteTextFile(SimDir / "jobsub", JobsubContent)
 
-            # 3) Create subfolders
-            VolSearchDir = SimDir / "Dir_VolSearch"
+            # Create subfolders
             OptUnitDir = SimDir / "Dir_OptUnitCell"
             VolSearchDir.mkdir(parents=True, exist_ok=True)
             OptUnitDir.mkdir(parents=True, exist_ok=True)
 
-            # 4) Create optunitcell_is_done file
+            # Create optunitcell_is_done file
             (OptUnitDir / "optunitcell_is_done").touch()
 
-            # 5–7) Prepare new POSCAR (unique per folder)
+            # Prepare new POSCAR (unique per folder)
             NewPosition, NewCellDim = opp.PreparePOSCAR(
                 Position, CellDim, GasRatio=GasRatio, InitO2=InitO2
             )
             vio.WritePoscar(str(SimDir), NewPosition, NewCellDim)
             print("Prepared POSCAR for {}".format(FolderName))
 
-            # 8) Copy files into Dir_VolSearch
+            # Copy files into Dir_VolSearch
             CopyFile(SimDir / "POSCAR", VolSearchDir / "POSCAR")
             CopyFile(SimDir / "jobsub", VolSearchDir / "jobsub")
             for FN in ["KPOINTS", "POTCAR", "job.in", "INCAR"]:
                 CopyFile(SimDir / FN, VolSearchDir / FN)
 
-            '''
-            # 9) Run sbatch jobsub
-            try:
-                Proc = subprocess.run(
-                    ["sbatch", "jobsub"],
-                    cwd=str(VolSearchDir),
-                    capture_output=True,
-                    text=True,
-                    check=False,
+            # Set navg = 10000000 in Dir_VolSearch/job.in so volsearch_cont runs indefinitely
+            VolSearchJobIn = VolSearchDir / "job.in"
+            if VolSearchJobIn.exists():
+                with VolSearchJobIn.open("r", encoding="utf-8") as F:
+                    VsJobInText = F.read()
+
+                NavgPat = re.compile(
+                    r"^(\s*#?\s*)(navg)(\s*=\s*)([^#\n]*)(.*)$",
+                    re.IGNORECASE | re.MULTILINE
                 )
-                Status = "OK (exit {})".format(Proc.returncode)
-                if Proc.returncode != 0:
-                    Status = "ERROR (exit {})".format(Proc.returncode)
-                LogLines.append("[{}] sbatch jobsub -> {}".format(FolderName, Status))
-                if Proc.stdout:
-                    LogLines.append("[{}] stdout: {}".format(FolderName, Proc.stdout.strip()))
-                if Proc.stderr:
-                    LogLines.append("[{}] stderr: {}".format(FolderName, Proc.stderr.strip()))
-            except FileNotFoundError:
-                LogLines.append("[{}] sbatch not found on PATH; skipped submission.".format(FolderName))
-            except Exception as E:
-                LogLines.append("[{}] sbatch execution failed: {!r}".format(FolderName, E))
-            '''
-            
-    # 10) Create xyz_files folder
+                VsJobInNew = NavgPat.sub(
+                    lambda m: m.group(1) + m.group(2) + m.group(3) + "10000000" + m.group(5),
+                    VsJobInText
+                )
+                with VolSearchJobIn.open("w", encoding="utf-8") as F:
+                    F.write(VsJobInNew)
+
+            # Submit initial VASP job using vaspcmd from Dir_VolSearch/job.in
+            try:
+                JobInParams = vio.ReadKeyValueFile(VolSearchJobIn)
+                VaspCmd = JobInParams.get("vaspcmd", "").strip().split()[0] if JobInParams.get("vaspcmd", "").strip() else ""
+            except Exception:
+                VaspCmd = ""
+
+            if VaspCmd:
+                try:
+                    Result = subprocess.run(
+                        [VaspCmd, "jobsub"],
+                        cwd=str(VolSearchDir),
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    Status = "exit {}".format(Result.returncode)
+                    if Result.returncode != 0:
+                        Status = "ERROR ({})".format(Status)
+                    LogLines.append("[{}] {} jobsub → {}".format(FolderName, VaspCmd, Status))
+                    if Result.stdout:
+                        LogLines.append("[{}] stdout: {}".format(FolderName, Result.stdout.strip()))
+                    if Result.stderr:
+                        LogLines.append("[{}] stderr: {}".format(FolderName, Result.stderr.strip()))
+                except FileNotFoundError:
+                    LogLines.append("[{}] '{}' not on PATH — skipped initial VASP submission".format(FolderName, VaspCmd))
+                except Exception as E:
+                    LogLines.append("[{}] initial VASP submission failed: {!r}".format(FolderName, E))
+            else:
+                LogLines.append("[{}] vaspcmd not set in job.in — skipped initial VASP submission".format(FolderName))
+
+            LogLines.append("[{}] set up successfully".format(FolderName))
+
+    # Create xyz_files folder
     (WorkDir / "xyz_files").mkdir(parents=True, exist_ok=True)
 
-    # 11) Write log.out
+    return LogLines
+
+
+def PrepareWorkingDirectory():
+
+    WorkDir = Path.cwd()
+
+    RequiredKeys = [
+        'Temperatures',
+        'NSims',
+        'GasRatio',
+        'InitO2Count'
+    ]
+
+    OxParamsPath = WorkDir / "OxParams"
+    Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys=RequiredKeys)
+
+    LogLines = SetupWorkspace(WorkDir, Params)
+
     WriteTextFile(WorkDir / "log.out", "\n".join(LogLines) + "\n")
 
 

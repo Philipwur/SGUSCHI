@@ -330,14 +330,15 @@ def TestWatchDaemonPassesParentPid(monkeypatch: pytest.MonkeyPatch, RootDir: Pat
 
 
 def TestExampleOxidationMasterStartsSummaryDaemon() -> None:
-    """The example master should use the one-line summary watcher."""
+    """SGUSCHI.py (the orchestrator) should start the summary watcher daemon."""
     RootDir = Path(__file__).resolve().parents[2]
-    Text = (RootDir / "example" / "OxidationMaster").read_text(
-        encoding="utf-8"
-    )
+    # SimulationSummary daemon is now launched by SGUSCHI.py, not OxidationMaster directly.
+    Text = (RootDir / "src" / "SGUSCHI.py").read_text(encoding="utf-8")
 
-    assert "SimulationSummary.py" in Text
+    assert "SimulationSummary" in Text
     assert "--watch-daemon" in Text
-    assert "--oxparams OxParams" in Text
-    assert "expected.tsv" not in Text
+    assert "--oxparams" in Text
     assert not (RootDir / "src" / "utils" / "OxiMasterFailFast.sbatch").exists()
+    # OxidationMaster is now a thin Slurm wrapper that calls SGUSCHI.py
+    MasterText = (RootDir / "example" / "OxidationMaster").read_text(encoding="utf-8")
+    assert "SGUSCHI.py" in MasterText

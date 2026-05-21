@@ -9,6 +9,7 @@
   + Use job.started/job.exit marker times to report total VASP job runtime independently of Slurm/PBS accounting; reserve scheduler-specific accounting for optional CPU/GPU-hour reporting.
 - Remove need for INCAR (and maybe also job.in) in starting folder. Instead have saved template.
 - Set time limit variable.
+- Add all atomic weights and see if we can make the script more friendly to other materials systems.
 
 ## README
 

@@ -287,6 +287,34 @@ def LatestFatalDetail(Paths: Sequence[Path]) -> Optional[str]:
     return Truncate(LatestLine, 58) if LatestLine else None
 
 
+def ReadJobMarkers(WorkDir: Path) -> Tuple[Optional[float], Optional[int], bool]:
+    """Read job.started / job.exit / job.killed written by SGUSCHI.py.
+
+    Returns (started_mtime_or_None, exit_code_or_None, was_killed).
+    """
+    StartedPath = WorkDir / "job.started"
+    ExitPath    = WorkDir / "job.exit"
+    KilledPath  = WorkDir / "job.killed"
+
+    StartedMtime: Optional[float] = None
+    if StartedPath.exists():
+        try:
+            StartedMtime = StartedPath.stat().st_mtime
+        except OSError:
+            pass
+
+    WasKilled = KilledPath.exists()
+
+    ExitCode: Optional[int] = None
+    if ExitPath.exists():
+        try:
+            ExitCode = int(ExitPath.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            ExitCode = -1
+
+    return StartedMtime, ExitCode, WasKilled
+
+
 def ReadTail(PathFile: Path, MaxBytes: int = 32768) -> str:
     """Read the tail of a text file."""
     Size = PathFile.stat().st_size
@@ -318,7 +346,8 @@ def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
     for Step in StepFolders:
         AddStat(WorkDir / str(Step))
 
-    for Name in ("volsearch_is_done", "sguschi_failed", "RateAnalysis.csv", "jobsub.log"):
+    for Name in ("volsearch_is_done", "sguschi_failed", "RateAnalysis.csv", "jobsub.log",
+                 "job.started", "job.exit", "job.killed"):
         PathFile = WorkDir / Name
         if PathFile.exists():
             AddStat(PathFile)
@@ -372,6 +401,17 @@ def DetermineStatus(
         return "FAILED", "N", "Y", "sguschi_failed"
     if FatalDetail:
         return "FAILED", "N", "Y", FatalDetail
+
+    # scheduler-neutral markers written by SGUSCHI.py
+    _StartedMtime, _ExitCode, _WasKilled = ReadJobMarkers(WorkDir)
+    if _WasKilled:
+        return "KILLED", "N", "Y", "job.killed"
+    if _ExitCode is not None:
+        if _ExitCode == 0:
+            return "DONE", "Y", "N", "job.exit=0"
+        return "FAILED", "N", "Y", "job.exit={}".format(_ExitCode)
+    if _StartedMtime is not None:
+        return "RUNNING", "N", "N", "job.started present"
 
     RecentActivity = LatestActivityTime(WorkDir)
     if VaspState == "stuck":
