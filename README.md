@@ -60,7 +60,7 @@ Plain text file, one entry per line: `Element = radius_in_Angstroms`. Supports `
 
 ### job.in
 
-SLUSCHI volume-search configuration. Set `thmexp_only = 1` to skip melt and coexistence calculations and run volume search only.
+SLUSCHI volume-search configuration. Preconfigured settings work well.
 
 ## Architecture
 
