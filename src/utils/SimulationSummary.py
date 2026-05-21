@@ -30,35 +30,35 @@ FATAL_RE = re.compile(r"\bFATAL\b", flags=re.IGNORECASE)
 class SimulationRow:
     """One row in the root-level simulation summary."""
 
-    Sim: str
+    Simulation: str
     Status: str
-    Dirs: str
+    Folders: str
     Latest: str
-    Rows: str
-    Time_ps: str
-    O2Added: str
-    GasRem: str
-    Wall: str
+    RateRows: str
+    SimTime_ps: str
+    TotalO2Added: str
+    MoleculesRemoved: str
+    WallTime: str
     Done: str
-    Fail: str
+    Failed: str
     Detail: str
 
 
 # Each entry is (field_name, display_header). Field names must be valid Python
-# identifiers; display headers can use any characters (e.g. "t(ps)").
+# identifiers and must match the SimulationRow dataclass fields.
 SUMMARY_COLUMNS: Tuple[Tuple[str, str], ...] = (
-    ("Sim",     "Sim"),
-    ("Status",  "Status"),
-    ("Dirs",    "Dirs"),
-    ("Latest",  "Latest"),
-    ("Rows",    "Rows"),
-    ("Time_ps", "t(ps)"),
-    ("O2Added", "O2Added"),
-    ("GasRem",  "GasRem"),
-    ("Wall",    "Wall"),
-    ("Done",    "Done"),
-    ("Fail",    "Fail"),
-    ("Detail",  "Detail"),
+    ("Simulation",       "Simulation"),
+    ("Status",           "Status"),
+    ("Folders",          "Folders"),
+    ("Latest",           "Latest"),
+    ("RateRows",         "RateRows"),
+    ("SimTime_ps",       "SimTime_ps"),
+    ("TotalO2Added",     "TotalO2Added"),
+    ("MoleculesRemoved", "MoleculesRemoved"),
+    ("WallTime",         "WallTime"),
+    ("Done",             "Done"),
+    ("Failed",           "Failed"),
+    ("Detail",           "Detail"),
 )
 SUMMARY_HEADERS = tuple(Field for Field, _ in SUMMARY_COLUMNS)
 SUMMARY_DISPLAY_HEADERS = tuple(Display for _, Display in SUMMARY_COLUMNS)
