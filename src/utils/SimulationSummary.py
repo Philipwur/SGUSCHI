@@ -427,17 +427,17 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
-        Sim=Label,
+        Simulation=Label,
         Status=Status,
-        Dirs=str(len(StepFolders)) if WorkDir.exists() else "-",
+        Folders=str(len(StepFolders)) if WorkDir.exists() else "-",
         Latest=str(StepFolders[-1]) if StepFolders else "-",
-        Rows=RateRows,
-        Time_ps=SimTime,
-        O2Added=TotalO2Added,
-        GasRem=MoleculesRemoved,
-        Wall=EstimateWallTime(WorkDir, StepFolders),
+        RateRows=RateRows,
+        SimTime_ps=SimTime,
+        TotalO2Added=TotalO2Added,
+        MoleculesRemoved=MoleculesRemoved,
+        WallTime=EstimateWallTime(WorkDir, StepFolders),
         Done=Done,
-        Fail=Failed,
+        Failed=Failed,
         Detail=Detail,
     )
 
