@@ -5,3 +5,4 @@ src/DevArea
 .pytest_cache
 CLAUDE.md
 .*
+debug.log
