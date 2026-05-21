@@ -8,7 +8,7 @@ Edit the files in this folder before running anything:
 
 | File | What to set |
 |------|-------------|
-| `OxParams` | Temperatures, NSims, GasRatio, InitO2Count, tolerances |
+| `OxParams` | Temperatures, NSims, GasRatio, InitO2Count, tolerances; optional `MaxRuntime` (ps) |
 | `POSCAR` | Base crystal structure (cubic, no gas region, no oxygen atoms) |
 | `POTCAR` | Pseudopotentials matching POSCAR element order (O last) |
 | `INCAR` | VASP MD settings (IBRION=0, ISIF=2, NSW=80) |

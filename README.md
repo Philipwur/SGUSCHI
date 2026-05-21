@@ -14,7 +14,7 @@ Insert lisence here
 ## Requirements
 
 - **Python** ≥ 3.8 with `numpy`, `pandas`, `scipy`
-- **VASP** (tested with standard and MLFF modes)
+- **VASP** licensed and working installation (tested with standard and MLFF modes)
 - **Fortran compiler** (gfortran or ifort) to build the SLUSCHI binary
 - **Job scheduler**: tested on **Slurm** and **PBS Torque**
 - Optional (postprocessing): `plotly`, `tqdm`
@@ -62,10 +62,13 @@ The `example/` directory contains a ready-to-use starting point (with empty POTC
 | `AtomicRadiusTol` | Multiplier applied to the sum of covalent radii for bond detection |
 | `O2Tol` | Target O₂ count per unit void fraction |
 | `OSmoothing` | Exponential smoothing factor α for O₂ count (default 0.001; heavily history-weighted) |
+| `MaxRuntime` | *(optional)* Stop simulation after this many ps of simulated time. If unset, runs until convergence. |
 | `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
 | `InitO2Count` | Number of O₂ molecules placed at initialisation |
 | `Temperatures` | List of simulation temperatures in K |
 | `NSims` | Number of parallel simulation replicas per temperature |
+
+> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, raise `MaxRuntime` in `OxParams`, then manually delete `volsearch_is_done`, `maxruntime_reached`, and `sguschi_failed` from `Dir_VolSearch` and resubmit `OxidationMaster`.
 
 ### CovalentRadii
 

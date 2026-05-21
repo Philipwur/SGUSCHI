@@ -241,6 +241,9 @@ def main(WorkDir = None, TestCase = False):
     OxygenSmoothing = float(OxParams['OSmoothing'])
     GasRatio = float(OxParams['GasRatio'])
     InitO2Count = int(OxParams['InitO2Count'])
+    MaxRuntime_ps = OxParams.get('MaxRuntime', None)
+    if MaxRuntime_ps is not None:
+        MaxRuntime_ps = float(MaxRuntime_ps)
         
     #Collect Radii for Bond Algo
     
@@ -411,8 +414,19 @@ def main(WorkDir = None, TestCase = False):
         
         # Update POSCAR
         vio.WritePoscar(WorkDir, Position, CellDim, Velocity)
-        
-        # Could come up with some solution to also include other outcar data 
+
+        if MaxRuntime_ps is not None:
+            CumulativeTime_ps = (SimTime + RateAnalysis['Time (fs)'].iloc[-1]) / 1000.0
+            if CumulativeTime_ps >= MaxRuntime_ps:
+                (WorkDir / "volsearch_is_done").write_text("", encoding="utf-8")
+                (WorkDir / "maxruntime_reached").write_text("", encoding="utf-8")
+                print(
+                    f"MaxRuntime {MaxRuntime_ps} ps reached "
+                    f"({CumulativeTime_ps:.4f} ps). Writing volsearch_is_done."
+                )
+                sys.exit(1)
+
+        # Could come up with some solution to also include other outcar data
         # but meh, we probably wont use it anyways.
         
     # Prevents any creation of new files and dumps variables

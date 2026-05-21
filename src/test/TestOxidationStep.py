@@ -220,3 +220,51 @@ def TestOxidationStepWritesOutputs(
 
     ParsedXyz = Vio.ReadXYZ(XyzPath, ReturnCoordinatesType="Direct")
     assert len(ParsedXyz["Positions"]) == 2
+
+
+def TestMaxRuntimeStopsSimulation(
+    TmpPath: Path,
+    MonkeyPatch: pytest.MonkeyPatch,
+) -> None:
+    """MaxRuntime reached: volsearch_is_done + maxruntime_reached written, exit 1."""
+    WorkDir = MakeWorkDir(TmpPath)
+    Root = WorkDir.parents[1]
+
+    # MakeOutcarData has TimesFs[-1]=2.0; initial RateAnalysis row has Time(fs)=0.
+    # Cumulative = 2.0 fs = 0.002 ps.  MaxRuntime = 0.001 ps → threshold exceeded.
+    (Root / "OxParams").write_text(
+        "AtomicRadiusTol = 1.10\nO2Tol = 0.10\nOSmoothing = 0.50\n"
+        "GasRatio = 1.0\nInitO2Count = 1\nMaxRuntime = 0.001\n",
+        encoding="utf-8",
+    )
+
+    MonkeyPatch.setattr(Ox.vio, "OutcarParser", lambda _: MakeOutcarData())
+
+    with pytest.raises(SystemExit) as ExcInfo:
+        Ox.main(WorkDir, TestCase=False)
+
+    assert ExcInfo.value.code == 1
+    assert (WorkDir / "volsearch_is_done").exists()
+    assert (WorkDir / "maxruntime_reached").exists()
+
+
+def TestMaxRuntimeNotReachedDoesNotStop(
+    TmpPath: Path,
+    MonkeyPatch: pytest.MonkeyPatch,
+) -> None:
+    """MaxRuntime not reached: simulation completes normally, no done marker written."""
+    WorkDir = MakeWorkDir(TmpPath)
+    Root = WorkDir.parents[1]
+
+    # Cumulative = 0.002 ps.  MaxRuntime = 1000.0 ps → far from threshold.
+    (Root / "OxParams").write_text(
+        "AtomicRadiusTol = 1.10\nO2Tol = 0.10\nOSmoothing = 0.50\n"
+        "GasRatio = 1.0\nInitO2Count = 1\nMaxRuntime = 1000.0\n",
+        encoding="utf-8",
+    )
+
+    MonkeyPatch.setattr(Ox.vio, "OutcarParser", lambda _: MakeOutcarData())
+
+    Ox.main(WorkDir, TestCase=False)
+
+    assert not (WorkDir / "volsearch_is_done").exists()

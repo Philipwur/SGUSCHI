@@ -329,6 +329,19 @@ def TestWatchDaemonPassesParentPid(monkeypatch: pytest.MonkeyPatch, RootDir: Pat
     assert "--quiet" in Command
 
 
+def TestMaxRuntimeReachedDetailIsShown(RootDir: Path) -> None:
+    """volsearch_is_done + maxruntime_reached should produce DONE with 'MaxRuntime reached' detail."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "volsearch_is_done").write_text("", encoding="utf-8")
+    (WorkDir / "maxruntime_reached").write_text("", encoding="utf-8")
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.Status == "DONE"
+    assert Row.Done == "Y"
+    assert Row.Detail == "MaxRuntime reached"
+
+
 def TestExampleOxidationMasterStartsSummaryDaemon() -> None:
     """SGUSCHI.py (the orchestrator) should start the summary watcher daemon."""
     RootDir = Path(__file__).resolve().parents[2]

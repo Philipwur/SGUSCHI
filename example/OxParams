@@ -9,4 +9,5 @@ AtomicRadiusTol = 1.50 #Tolerance for atomic radius comparison
 O2Tol = 0.5            #Tolerance for O2 molecule detection
 OSmoothing = 0.001     #Smoothing parameter for O2 count analysis
 
-#Should maybe add a time persistence parameter here (0.2 ps or something)
+# MaxRuntime = 200   # Optional: stop after this many ps of simulated time.
+#                    # If unset, runs until volsearch_cont detects convergence.

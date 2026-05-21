@@ -347,7 +347,7 @@ def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
         AddStat(WorkDir / str(Step))
 
     for Name in ("volsearch_is_done", "sguschi_failed", "RateAnalysis.csv", "jobsub.log",
-                 "job.started", "job.exit", "job.killed"):
+                 "job.started", "job.exit", "job.killed", "maxruntime_reached"):
         PathFile = WorkDir / Name
         if PathFile.exists():
             AddStat(PathFile)
@@ -394,7 +394,9 @@ def DetermineStatus(
     VaspState = CheckVaspState(WorkDir, StepFolders)
 
     if DoneMarker.exists():
-        return "DONE", "Y", "N", "volsearch_is_done"
+        MaxRuntimeMarker = WorkDir / "maxruntime_reached"
+        Detail = "MaxRuntime reached" if MaxRuntimeMarker.exists() else "volsearch_is_done"
+        return "DONE", "Y", "N", Detail
     if VaspState == "queued":
         return "RUNNING", "N", "N", "OUTCAR empty, VASP job queued"
     if FailedMarker.exists():
