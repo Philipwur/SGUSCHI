@@ -356,10 +356,12 @@ def DetermineStatus(
     if FatalDetail:
         return "FAILED", "N", "Y", FatalDetail
 
+    RecentActivity = LatestActivityTime(WorkDir)
     if VaspState == "stuck":
+        if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
+            return "RUNNING", "N", "N", "OUTCAR empty, VASP starting up"
         return "STUCK", "N", "N", "OUTCAR empty, no VASP job submitted — restart OxidationMaster"
 
-    RecentActivity = LatestActivityTime(WorkDir)
     if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
         return "RUNNING", "N", "N", "recent file activity"
     if not StepFolders:
@@ -370,7 +372,7 @@ def DetermineStatus(
 def LatestActivityTime(WorkDir: Path) -> Optional[float]:
     """Return latest mtime for files/folders relevant to the simulation."""
     Times: List[float] = []
-    for Name in ("OUTCAR", "jobsub.log", "RateAnalysis.csv"):
+    for Name in ("RateAnalysis.csv", "jobsub.log"):
         PathFile = WorkDir / Name
         if PathFile.exists():
             try:
