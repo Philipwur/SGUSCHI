@@ -1,28 +1,84 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set failure_marker = sguschi_failed
+set submission_marker = .vasp_submitted_step
+set submission_log = .vasp_submit_last.out
+rm -f $failure_marker
+
+set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
+if ( "$sluschipath" == "" ) then
+  echo FATAL volsearch_cont: could not read sluschipath from ~/.sluschi.rc.
+  touch $failure_marker
+  exit 1
+endif
 
 #liquid?
 $sluschipath/getinfo.csh thmexp_liq job.in > /dev/null
 if ( $? == 0 ) then
-  @ flag_liq = `$sluschipath/getinfo.csh thmexp_liq job.in`
+  set flag_liq_value = `$sluschipath/getinfo.csh thmexp_liq job.in`
+  if ( "$flag_liq_value" == "" ) then
+    @ flag_liq = 0
+  else
+    @ flag_liq = $flag_liq_value
+  endif
 else
   @ flag_liq = 0
 endif
 
 #only?
 set only = `$sluschipath/getinfo.csh thmexp_only job.in`
+if ( "$only" == "" ) set only = 0
 set vaspcmd = `$sluschipath/getinfo.csh vaspcmd job.in`
 set temp = `$sluschipath/getinfo.csh temp job.in`
+if ( "$vaspcmd" == "" ) then
+  echo FATAL volsearch_cont: missing vaspcmd in job.in.
+  touch $failure_marker
+  exit 1
+endif
+if ( "$temp" == "" ) then
+  echo FATAL volsearch_cont: missing temp in job.in.
+  touch $failure_marker
+  exit 1
+endif
 sed -i '/NBANDS/d' INCAR
 set sigma = `awk -v a="0.000086" -v b=$temp 'BEGIN{print (b*a)}'`
+if ( "$sigma" == "" ) then
+  echo FATAL volsearch_cont: failed to calculate SIGMA from temp $temp.
+  touch $failure_marker
+  exit 1
+endif
 
 #$sluschipath/UpdateINCAR PREC normal
 $sluschipath/UpdateINCAR SIGMA $sigma
+if ( $? != 0 ) then
+  echo FATAL volsearch_cont: failed to update SIGMA.
+  touch $failure_marker
+  exit 1
+endif
 $sluschipath/UpdateINCAR TEBEG $temp 
+if ( $? != 0 ) then
+  echo FATAL volsearch_cont: failed to update TEBEG.
+  touch $failure_marker
+  exit 1
+endif
 $sluschipath/UpdateINCAR TEEND $temp 
+if ( $? != 0 ) then
+  echo FATAL volsearch_cont: failed to update TEEND.
+  touch $failure_marker
+  exit 1
+endif
 $sluschipath/UpdateINCAR NSW 80
+if ( $? != 0 ) then
+  echo FATAL volsearch_cont: failed to update NSW.
+  touch $failure_marker
+  exit 1
+endif
 $sluschipath/UpdateINCAR SMASS 0 
+if ( $? != 0 ) then
+  echo FATAL volsearch_cont: failed to update SMASS.
+  touch $failure_marker
+  exit 1
+endif
 
 # submit the first job
 set nstep=1
@@ -36,6 +92,39 @@ echo === Continue running with JOB $nstep ===
 @ count = 0
 @ flag_gamma = 0
 
+# Startup guard: recover from interrupted run (OUTCAR empty, no VASP running).
+# Triggered when master job was killed between `touch OUTCAR` and `$vaspcmd jobsub`.
+if ( $nstep > 1 && ! -s OUTCAR ) then
+  @ _resubmit = 1
+  if ( -e $submission_marker ) then
+    set _sub_for = `cat $submission_marker | tr -d '[:space:]'`
+    if ( "$_sub_for" == "$nstep" ) then
+      echo "WARNING volsearch_cont: OUTCAR is empty but job was recorded as submitted for step $nstep. Waiting (job may be queued)."
+      echo "If this simulation appears stuck, delete $submission_marker and restart."
+      @ _resubmit = 0
+    endif
+  endif
+  if ( $_resubmit ) then
+    echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
+    echo $nstep > $submission_marker
+    rm -f $submission_log
+    $vaspcmd jobsub >>& $submission_log
+    set submit_status = $?
+    cat $submission_log >> jobsub.log
+    if ( $submit_status != 0 ) then
+      grep -qi "Socket timed out" $submission_log
+      if ( $? == 0 ) then
+        echo "WARNING volsearch_cont: startup resubmission timed out after Slurm may have accepted the job. Waiting for job $nstep."
+      else
+        rm -f $submission_marker
+        echo "FATAL volsearch_cont: resubmission at startup failed."
+        touch $failure_marker
+        exit 1
+      endif
+    endif
+  endif
+endif
+
 while ($stopflag == 0)
 
   sleep 60 ############################################################
@@ -45,78 +134,298 @@ while ($stopflag == 0)
   if (! $?) then # Job is done
 
     echo ====== JOB $nstep DONE ======
+    rm -f $submission_marker
 
     @ natom = `grep 'NIONS =' OUTCAR | tail -1 | awk '{print $12}'`
     echo $natom > natom
 
+    @ pressure_fallback = 0
+    set pressure_fallback_reason = ""
+    set pressure_Pulay = "N/A"
+    set pressure_kinetic = "N/A"
+    set pressure_target = "N/A"
+
     if ( $count == 0 ) then
       echo --- Calculate Pulay stress... ---
       $sluschipath/PressurePulay > /dev/null
+      if ( $? != 0 ) then
+        echo WARNING volsearch_cont: PressurePulay failed; skipping pressure-controlled lattice update for this job.
+        @ pressure_fallback = 1
+        set pressure_fallback_reason = "PressurePulay failed"
+      endif
     endif
     @ count = $count + 1
     if ( $count == 10 ) @ count = 0
-    set pressure_Pulay = `cat pressure_Pulay.out`
+    if ( -s pressure_Pulay.out ) then
+      set pressure_Pulay = `cat pressure_Pulay.out`
+    else if ( $pressure_fallback == 0 ) then
+      echo WARNING volsearch_cont: pressure_Pulay.out is missing or empty; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure_Pulay.out is missing or empty"
+    endif
 
     $sluschipath/GetPTE # get P, T and E
-    grep 'in kB' OUTCAR -B1 | grep -v 'in kB' | grep -v ' 0.00 ' | grep -v '\-\-' | grep -v CPU | grep -v cpu | awk '{print $2,$3,$4,$5,$6,$7}' > pressure3.out # get Pxx, Pyy, Pzz, Pxy, Pyz, Pzx
-    set volume=`grep volume/ion OUTCAR | awk '{print $5}'`
-    set temp=`grep TEEND INCAR | awk '{print $3}'`
-    set pressure_kinetic=`awk -v k="1.38e-23" -v a="1.0e22" -v b=$temp -v c=$volume 'BEGIN{print (k*b/c*a)}'`
-    echo $pressure_kinetic > pressure_kinetic.out
-    grep 'volume of cell' OUTCAR | awk '{print $5}' >> volume.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: GetPTE failed; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "GetPTE failed"
+    endif
+    rm -f pressure3.out pressure3_total.out
+    if ( $pressure_fallback == 0 ) then
+    grep 'in kB' OUTCAR -B1 | grep -v 'in kB' | grep -v '\-\-' | grep -v CPU | grep -v cpu | awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF >= 7 {ok=1; for (i=2;i<=7;i++) if (isnum($i) == 0) ok=0; if (ok) print $2,$3,$4,$5,$6,$7}' > pressure3.out # get Pxx, Pyy, Pzz, Pxy, Pyz, Pzx
+    if ( ! -s pressure3.out ) then
+      echo WARNING volsearch_cont: pressure3.out has no valid numeric stress rows after parsing OUTCAR; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure3.out has no valid numeric stress rows"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} {if (NF != 6) bad=1; for (i=1;i<=NF;i++) if (isnum($i) == 0) bad=1; n++} END{if (bad || n < 1) exit 1}' pressure3.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: pressure3.out must contain only six-column numeric stress rows; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure3.out has malformed stress rows"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    set volume=`grep volume/ion OUTCAR | tail -1 | awk '{print $5}'`
+    if ( "$volume" == "" ) then
+      echo WARNING volsearch_cont: could not extract volume/ion from OUTCAR; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "could not extract volume/ion from OUTCAR"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk -v c="$volume" 'BEGIN{if (c+0 > 0) exit 0; exit 1}'
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: invalid volume/ion value $volume; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "invalid volume/ion value"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    set temp=`grep TEEND INCAR | tail -1 | awk '{print $3}'`
+    if ( "$temp" == "" ) then
+      echo WARNING volsearch_cont: could not extract TEEND from INCAR; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "could not extract TEEND from INCAR"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    set pressure_kinetic=`awk -v k="1.38e-23" -v a="1.0e22" -v b="$temp" -v c="$volume" 'BEGIN{if (c+0 <= 0 || b == "") exit 1; printf("%.5f\n", (k*b/c*a))}'`
+    if ( $? != 0 || "$pressure_kinetic" == "" ) then
+      echo WARNING volsearch_cont: failed to calculate kinetic pressure; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "failed to calculate kinetic pressure"
+    else
+      echo $pressure_kinetic > pressure_kinetic.out
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_kinetic.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: pressure_kinetic.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure_kinetic.out is missing or non-numeric"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_Pulay.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: pressure_Pulay.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure_Pulay.out is missing or non-numeric"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    set cell_volume = `grep 'volume of cell' OUTCAR | tail -1 | awk '{print $5}'`
+    if ( "$cell_volume" == "" ) then
+      echo WARNING volsearch_cont: could not extract volume of cell from OUTCAR; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "could not extract volume of cell from OUTCAR"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk -v v="$cell_volume" 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} BEGIN{gsub(/[Dd]/,"E",v); if (isnum(v) && v+0 > 0) exit 0; exit 1}'
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: invalid volume of cell value $cell_volume; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "invalid volume of cell value"
+    else
+      echo $cell_volume >> volume.out
+    endif
+    endif
 
-
+    if ( $pressure_fallback == 0 ) then
     set pressure_target = `$sluschipath/getinfo.csh press job.in`
-    echo $pressure_target  > pressure_target.out
+    if ( "$pressure_target" == "" ) then
+      echo WARNING volsearch_cont: missing press in job.in; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "missing press in job.in"
+    else
+      echo $pressure_target  > pressure_target.out
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_target.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: pressure_target.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "pressure_target.out is missing or non-numeric"
+    endif
+    endif
+    if ( $pressure_fallback == 0 ) then
+    awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {last=$1; seen=1} END{gsub(/[Dd]/,"E",last); if (seen < 1 || isnum(last) == 0 || last+0 <= 0) exit 1}' volume.out
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: volume.out is missing or its last value is invalid; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "volume.out is missing or its last value is invalid"
+    endif
+    endif
     
+    if ( $pressure_fallback == 0 ) then
     $sluschipath/PressureAvg.x 
+    if ( $? != 0 || ! -s pressure3_total.out ) then
+      echo WARNING volsearch_cont: PressureAvg.x failed or did not create pressure3_total.out; skipping pressure-controlled lattice update for this job.
+      @ pressure_fallback = 1
+      set pressure_fallback_reason = "PressureAvg.x failed"
+    endif
+    endif
 
     head -5 POSCAR | tail -3 > lattice.out
     set v1 = `head -1 lattice.out`
     set v2 = `head -2 lattice.out | tail -1`
     set v3 = `head -3 lattice.out | tail -1`
     rm lattice.out
-    set p = `cat pressure3_total.out`
+    if ( $pressure_fallback == 1 ) then
+      set p = "0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"
+      echo $p > pressure3_total.out
+    else
+      set p = `cat pressure3_total.out`
+      @ pcount = `echo $p | awk '{print NF}'`
+      if ( $pcount != 6 ) then
+        echo WARNING volsearch_cont: pressure3_total.out does not contain six pressure components; skipping pressure-controlled lattice update for this job.
+        @ pressure_fallback = 1
+        set pressure_fallback_reason = "pressure3_total.out does not contain six pressure components"
+        set p = "0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"
+        echo $p > pressure3_total.out
+      endif
+    endif
     set pxx = `echo $p | awk '{print $1}'`
     set pyy = `echo $p | awk '{print $2}'`
     set pzz = `echo $p | awk '{print $3}'`
     set pxy = `echo $p | awk '{print $4}'`
     set pyz = `echo $p | awk '{print $5}'`
     set pxz = `echo $p | awk '{print $6}'`
-    echo $v1 $v2 $v3 $p >> lattice_pressure_history.out
-    echo Pulay stress $pressure_Pulay, kinetic pressure $pressure_kinetic, pressure target $pressure_target kbar.
-    echo "--- LATTICE VECTORS --- \t\t --- PRESSURE ---"
-    echo "$v1 \t $pxx $pxy $pxz" 
-    echo "$v2 \t $pxy $pyy $pyz"
-    echo "$v3 \t $pxz $pyz $pzz"
+    if ( $pressure_fallback == 1 ) then
+      echo WARNING volsearch_cont: pressure update skipped for JOB $nstep \($pressure_fallback_reason\); current lattice will be reused.
+    else
+      echo $v1 $v2 $v3 $p >> lattice_pressure_history.out
+      echo Pulay stress $pressure_Pulay, kinetic pressure $pressure_kinetic, pressure target $pressure_target kbar.
+      echo "--- LATTICE VECTORS --- \t\t --- PRESSURE ---"
+      echo "$v1 \t $pxx $pxy $pxz"
+      echo "$v2 \t $pxy $pyy $pyz"
+      echo "$v3 \t $pxz $pyz $pzz"
+    endif
 
     # --- FIX 2: Added $sluschipath/ prefix ---
     set navg_pressure = `$sluschipath/getinfo.csh navg job.in`
     set factor_divide = `$sluschipath/getinfo.csh factor job.in`
+    if ( "$navg_pressure" == "" ) then
+      echo FATAL volsearch_cont: missing navg in job.in.
+      touch $failure_marker
+      exit 1
+    endif
+    if ( "$factor_divide" == "" ) then
+      echo FATAL volsearch_cont: missing factor in job.in.
+      touch $failure_marker
+      exit 1
+    endif
+    awk -v f="$factor_divide" 'BEGIN{if (f+0 != 0) exit 0; exit 1}'
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: invalid factor value $factor_divide.
+      touch $failure_marker
+      exit 1
+    endif
     echo $navg_pressure > param.in
     echo $factor_divide >> param.in
-    $sluschipath/DetermineSize.x
+    rm -f lattice_predict.out
+    if ( $pressure_fallback == 1 ) then
+      echo $v1 > lattice_predict.out
+      echo $v2 >> lattice_predict.out
+      echo $v3 >> lattice_predict.out
+      echo WARNING volsearch_cont: DetermineSize.x skipped for JOB $nstep because pressure update failed.
+    else
+      $sluschipath/DetermineSize.x
+      if ( $? != 0 || ! -s lattice_predict.out ) then
+        echo FATAL volsearch_cont: DetermineSize.x failed or did not create lattice_predict.out.
+        touch $failure_marker
+        exit 1
+      endif
+    endif
     
     echo --- ADJUST INCAR TAGS ---
     $sluschipath/AdjustPOTIM
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: AdjustPOTIM failed; keeping current POTIM.
+    endif
     $sluschipath/AdjustNBANDS
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: AdjustNBANDS failed; keeping current NBANDS/default.
+    endif
     $sluschipath/AdjustBMIX
+    if ( $? != 0 ) then
+      echo WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX.
+    endif
     mkdir $nstep
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: failed to create step folder $nstep.
+      touch $failure_marker
+      exit 1
+    endif
     cp INCAR KPOINTS POSCAR OSZICAR $nstep
-    @ NKPTS = `grep NKPTS OUTCAR | awk '{print $4}'`
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: failed to copy inputs into step folder $nstep.
+      touch $failure_marker
+      exit 1
+    endif
+    set nkpts_value = `grep NKPTS OUTCAR | awk '{print $4}'`
+    if ( "$nkpts_value" == "" ) then
+      echo FATAL volsearch_cont: could not extract NKPTS from OUTCAR.
+      touch $failure_marker
+      exit 1
+    endif
+    @ NKPTS = $nkpts_value
     # --- FIX 2: Added $sluschipath/ prefix ---
-    @ gamma = `$sluschipath/getinfo.csh gamma_possible job.in`
+    set gamma_value = `$sluschipath/getinfo.csh gamma_possible job.in`
+    if ( "$gamma_value" == "" ) set gamma_value = 0
+    @ gamma = $gamma_value
     if ( $NKPTS == 1 && $gamma == 1 && -e ../jobsub_gamma ) then
       if ( $flag_gamma == 0 ) then
         cp IBZKPT KPOINTS
-        rm WAVECAR
+        rm -f WAVECAR
         @ flag_gamma = 1
       endif
       cp ../jobsub_gamma jobsub
+      if ( $? != 0 ) then
+        echo FATAL volsearch_cont: failed to copy ../jobsub_gamma.
+        touch $failure_marker
+        exit 1
+      endif
     else
       cp ../jobsub .
+      if ( $? != 0 ) then
+        echo FATAL volsearch_cont: failed to copy ../jobsub.
+        touch $failure_marker
+        exit 1
+      endif
     endif
     mv OUTCAR $nstep
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: failed to move OUTCAR into step folder $nstep.
+      touch $failure_marker
+      exit 1
+    endif
     touch OUTCAR
 
     # --- FIX 2: Added $sluschipath/ prefix to ALL below ---
@@ -128,19 +437,46 @@ while ($stopflag == 0)
     endif
     $sluschipath/getinfo.csh thmexp_max job.in > /dev/null
     if ( $? == 0 ) then
-      @ maxstep = `$sluschipath/getinfo.csh thmexp_max job.in`
+      set maxstep_value = `$sluschipath/getinfo.csh thmexp_max job.in`
+      if ( "$maxstep_value" == "" ) then
+        @ maxstep = 5
+      else
+        @ maxstep = $maxstep_value
+      endif
     else
       @ maxstep = 5
     endif
     $sluschipath/getinfo.csh thmexp_min job.in > /dev/null
     if ( $? == 0 ) then
-      @ minstep = `$sluschipath/getinfo.csh thmexp_min job.in`
+      set minstep_value = `$sluschipath/getinfo.csh thmexp_min job.in`
+      if ( "$minstep_value" == "" ) then
+        @ minstep = 1
+      else
+        @ minstep = $minstep_value
+      endif
     else
       @ minstep = 1
     endif
     
-    $sluschipath/VolSearchStop.x
-    @ stopflag = `cat VolSearchStop.out`
+    if ( $pressure_fallback == 1 ) then
+      @ stopflag = 0
+      echo WARNING volsearch_cont: VolSearchStop.x skipped for JOB $nstep because no reliable pressure was available.
+    else
+      rm -f VolSearchStop.out
+      $sluschipath/VolSearchStop.x
+      if ( $? != 0 || ! -s VolSearchStop.out ) then
+        echo FATAL volsearch_cont: VolSearchStop.x failed or did not create VolSearchStop.out.
+        touch $failure_marker
+        exit 1
+      endif
+      set stopflag_value = `cat VolSearchStop.out`
+      if ( "$stopflag_value" == "" ) then
+        echo FATAL volsearch_cont: VolSearchStop.out is empty.
+        touch $failure_marker
+        exit 1
+      endif
+      @ stopflag = $stopflag_value
+    endif
     if ( -d $maxstep )  @ stopflag = 1
     if ( ! -d $minstep )  @ stopflag = 0
     if ( $stopflag == 1 ) then
@@ -200,18 +536,69 @@ while ($stopflag == 0)
     else
       if ( $flag_liq == 1 && $nstep == 6 ) then
         set temp = `$sluschipath/getinfo.csh temp job.in` # (Fixed here too just in case)
+        if ( "$temp" == "" ) then
+          echo FATAL volsearch_cont: missing temp in job.in while resetting liquid run temperature.
+          touch $failure_marker
+          exit 1
+        endif
         $sluschipath/UpdateINCAR TEBEG $temp
+        if ( $? != 0 ) then
+          echo FATAL volsearch_cont: failed to update TEBEG for liquid run.
+          touch $failure_marker
+          exit 1
+        endif
         $sluschipath/UpdateINCAR TEEND $temp
+        if ( $? != 0 ) then
+          echo FATAL volsearch_cont: failed to update TEEND for liquid run.
+          touch $failure_marker
+          exit 1
+        endif
+      endif
+      if ( ! -s CONTCAR ) then
+        echo FATAL volsearch_cont: missing CONTCAR before building next POSCAR.
+        touch $failure_marker
+        exit 1
+      endif
+      if ( ! -s lattice_predict.out ) then
+        echo FATAL volsearch_cont: missing lattice_predict.out before building next POSCAR.
+        touch $failure_marker
+        exit 1
       endif
       head -2 CONTCAR > POSCAR
       cat lattice_predict.out >> POSCAR
       tail -n+6 CONTCAR >> POSCAR
+      if ( $? != 0 || ! -s POSCAR ) then
+        echo FATAL volsearch_cont: failed to build next POSCAR.
+        touch $failure_marker
+        exit 1
+      endif
       
       python "$sluschipath/../../workflow/OxidationStep.py"
-      
-      $vaspcmd jobsub >> jobsub.log
-      set nstep = `expr $nstep + 1`
-      echo Job $nstep submitted. Waiting for job $nstep to finish... 
+      if ( $? != 0 ) then
+        echo FATAL volsearch_cont: OxidationStep.py failed; no new job submitted.
+        touch $failure_marker
+        exit 1
+      endif
+
+      set nextstep = `expr $nstep + 1`
+      echo $nextstep > $submission_marker
+      rm -f $submission_log
+      $vaspcmd jobsub >>& $submission_log
+      set submit_status = $?
+      cat $submission_log >> jobsub.log
+      if ( $submit_status != 0 ) then
+        grep -qi "Socket timed out" $submission_log
+        if ( $? == 0 ) then
+          echo WARNING volsearch_cont: job submission timed out after Slurm may have accepted the job. Waiting for job $nextstep.
+        else
+          rm -f $submission_marker
+          echo FATAL volsearch_cont: job submission command failed.
+          touch $failure_marker
+          exit 1
+        endif
+      endif
+      set nstep = $nextstep
+      echo Job $nstep submitted. Waiting for job $nstep to finish...
     endif
   endif
   endif

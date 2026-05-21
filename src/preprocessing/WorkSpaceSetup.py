@@ -55,11 +55,13 @@ def MakeFolderTag(folder_name: str) -> str:
 
 
 def UpdateJobName(job_content: str, folder_tag: str) -> str:
-    """Replace the #SBATCH job name line with the folder tag."""
-    pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", re.MULTILINE)
-    replacement = r"\1'{}'".format(folder_tag)
-    if pattern.search(job_content):
-        return pattern.sub(replacement, job_content)
+    """Replace the scheduler job name line with the folder tag (SLURM or PBS)."""
+    slurm_pattern = re.compile(r"^(#SBATCH\s+--job-name=).*$", re.MULTILINE)
+    if slurm_pattern.search(job_content):
+        return slurm_pattern.sub(r"\1'{}'".format(folder_tag), job_content)
+    pbs_pattern = re.compile(r"^(#PBS\s+-N\s*).*$", re.MULTILINE)
+    if pbs_pattern.search(job_content):
+        return pbs_pattern.sub(r"\g<1>{}".format(folder_tag), job_content)
     return "#SBATCH --job-name='{}'\n{}".format(folder_tag, job_content)
 
 

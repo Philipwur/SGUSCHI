@@ -1,0 +1,30 @@
+boldsample = 1
+temp = 873
+press = 0.0 #target pressure in diroptcell (kbar)
+navg = 3
+
+confident = 0
+error = 50.0
+
+vaspcmd = sbatch
+LongWT = 0              # run a job with very long walltime and skip waiting in the queue. switch it on if having a$
+
+kmesh = -1
+
+radius = 10.
+
+adj_potim = 1
+tgt_nelm = 6
+
+diff_solid = 0.5
+diff_liquid = 1.0
+
+adj_bmix = 1
+
+factor = 3000000.0 #how quickly lattice vectors will be adjusted (big = slow, weight)
+thmexp_cnvg = 0.01 #tol will never be met
+thmexp_max = 10000 #number of folders in VolSearch
+thmexp_min = 1
+thmexp_only = 1 #will only run volume search (never to melt and coex)
+thmexp_liq = 0
+thmexp_l_t = 10000

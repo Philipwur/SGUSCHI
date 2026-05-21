@@ -15,7 +15,7 @@ from utils.FixRateAnalysis import FixRateAnalysis
 -------------------------------------------------------------------------------
 How to use this script:
 
-From any given directory you can run:
+From any given Dir_VolSearch directory you can run:
 > python src/utils/RollbackTrajectory.py [TargetStep]
 > python src/utils/RollbackTrajectory.py [WorkDir] [TargetStep]
 

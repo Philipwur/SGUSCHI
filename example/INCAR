@@ -1,0 +1,32 @@
+PREC = normal #precision
+
+ISIF = 2 #stress tensor and dof
+
+ISYM   = 0 #no symmetry is used
+EDIFF = 1e-4 #tolerance of selectronic sc loop
+NELM = 120 #maximum electron sc steps, suggest putting this high to avoid having to bugfix
+NELMIN = 4 #minimum e sc steps
+ALGO = N #optimisation algo
+MAXMIX = 40
+
+NSIM = 4 #number of bands that are optimised paralell
+LPLANE = T
+LSCALU = F #wether to use scalapack decompsition
+NWRITE = 1 #amount of info in outcar
+
+LREAL = Auto #? Outcar always stops at the real space projector operators
+#NBLOCK = 1 #how many steps until DOS etc is calculated
+#KBLOCK = 100
+APACO = 20.00 #cutoff for PC function
+
+ISMEAR = -1 #smearing of partially occupied orbitals
+
+IBRION = 0 #MD
+SMASS = 0 #Nose thermostat
+SIGMA = 0.2064 #width of smearing
+TEBEG = 873 #starting temp
+TEEND = 873 #ending temp
+NSW = 80 #no of steps
+POTIM = 1 #timesteps in fs
+BMIX = 0.63
+SYMPREC = 1e-10
