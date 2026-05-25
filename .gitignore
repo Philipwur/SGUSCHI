@@ -7,3 +7,6 @@ CLAUDE.md
 .*
 debug.log
 todonote.md
+
+# Fortran build artifacts (built locally by `make` in src/dependencies/SLUSCHI_mod)
+src/dependencies/SLUSCHI_mod/*.x
