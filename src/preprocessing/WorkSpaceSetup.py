@@ -32,7 +32,6 @@ The following files must exist before running this script:
 from pathlib import Path
 import re
 import shutil
-import subprocess
 import ast
 import sys
 from typing import List, Optional, Tuple
@@ -91,7 +90,7 @@ def SetupWorkspace(
     If None, sets up all combinations from Params.
     Per-folder idempotent: folders where Dir_VolSearch already exists are skipped.
     """
-    RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub"]
+    RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub", "CovalentRadii"]
     EnsureFilesExist(WorkDir, RequiredFiles)
 
     Position, CellDim = vio.ReadPoscar(WorkDir)
@@ -216,37 +215,6 @@ def SetupWorkspace(
                 )
                 with VolSearchJobIn.open("w", encoding="utf-8") as F:
                     F.write(VsJobInNew)
-
-            # Submit initial VASP job using vaspcmd from Dir_VolSearch/job.in
-            try:
-                JobInParams = vio.ReadKeyValueFile(VolSearchJobIn)
-                VaspCmd = JobInParams.get("vaspcmd", "").strip().split()[0] if JobInParams.get("vaspcmd", "").strip() else ""
-            except Exception:
-                VaspCmd = ""
-
-            if VaspCmd:
-                try:
-                    Result = subprocess.run(
-                        [VaspCmd, "jobsub"],
-                        cwd=str(VolSearchDir),
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    Status = "exit {}".format(Result.returncode)
-                    if Result.returncode != 0:
-                        Status = "ERROR ({})".format(Status)
-                    LogLines.append("[{}] {} jobsub → {}".format(FolderName, VaspCmd, Status))
-                    if Result.stdout:
-                        LogLines.append("[{}] stdout: {}".format(FolderName, Result.stdout.strip()))
-                    if Result.stderr:
-                        LogLines.append("[{}] stderr: {}".format(FolderName, Result.stderr.strip()))
-                except FileNotFoundError:
-                    LogLines.append("[{}] '{}' not on PATH — skipped initial VASP submission".format(FolderName, VaspCmd))
-                except Exception as E:
-                    LogLines.append("[{}] initial VASP submission failed: {!r}".format(FolderName, E))
-            else:
-                LogLines.append("[{}] vaspcmd not set in job.in — skipped initial VASP submission".format(FolderName))
 
             LogLines.append("[{}] set up successfully".format(FolderName))
 

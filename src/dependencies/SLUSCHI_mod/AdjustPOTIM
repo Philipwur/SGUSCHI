@@ -1,6 +1,8 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
 # FIX 2: Add path prefix
 $sluschipath/getinfo.csh adj_potim job.in > /dev/null

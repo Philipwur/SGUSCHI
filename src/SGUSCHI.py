@@ -19,13 +19,14 @@ Re-run behaviour:
 import argparse
 import ast
 import os
+import shlex
 import signal
 import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 # ---------------------------------------------------------------------------
 # Path constants — derived from this file's location (src/SGUSCHI.py)
@@ -79,7 +80,15 @@ def ReadOxParams(WorkDir: Path) -> dict:
         print("ERROR: could not import VaspIO: {}".format(E))
         sys.exit(1)
 
-    RequiredKeys = ["Temperatures", "NSims", "GasRatio", "InitO2Count"]
+    RequiredKeys = [
+        "Temperatures",
+        "NSims",
+        "GasRatio",
+        "InitO2Count",
+        "AtomicRadiusTol",
+        "O2Tol",
+        "OSmoothing",
+    ]
     try:
         Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys=RequiredKeys)
     except Exception as E:
@@ -137,15 +146,15 @@ def ClassifySimulations(WorkDir: Path, Params: dict) -> Dict[str, str]:
 # Scheduler command
 # ---------------------------------------------------------------------------
 
-def ReadSchedulerCmd(JobInDir: Path) -> str:
-    """Return first word of vaspcmd from JobInDir/job.in.
+def ReadSchedulerCmd(JobInDir: Path) -> List[str]:
+    """Return vaspcmd from JobInDir/job.in as a tokenised argv list.
 
-    Falls back to 'sbatch' if job.in is absent or vaspcmd is not set.
-    Example: vaspcmd = sbatch vasp_std  →  returns 'sbatch'
+    Falls back to ['sbatch'] if job.in is absent or vaspcmd is not set.
+    Example: vaspcmd = sbatch --parsable  →  returns ['sbatch', '--parsable']
     """
     JobInPath = JobInDir / "job.in"
     if not JobInPath.exists():
-        return "sbatch"
+        return ["sbatch"]
     try:
         if str(SRC_DIR) not in sys.path:
             sys.path.insert(0, str(SRC_DIR))
@@ -153,10 +162,10 @@ def ReadSchedulerCmd(JobInDir: Path) -> str:
         Params = vio.ReadKeyValueFile(JobInPath)
         RawCmd = Params.get("vaspcmd", "").strip()
         if RawCmd:
-            return RawCmd.split()[0]
+            return shlex.split(RawCmd)
     except Exception:
         pass
-    return "sbatch"
+    return ["sbatch"]
 
 
 # ---------------------------------------------------------------------------
@@ -234,8 +243,15 @@ def NeedsInitialVaspJob(VolSearchDir: Path) -> bool:
         return False
 
 
-def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> None:
-    """Submit the initial VASP job in each newly-created Dir_VolSearch that needs it."""
+def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> Set[str]:
+    """Submit the initial VASP job in each newly-created Dir_VolSearch that needs it.
+
+    Returns the set of labels whose initial submission failed. Failed dirs are
+    marked with job.exit=-1 so the caller can exclude them from volsearch_cont
+    launch and avoid the master walltime being burnt waiting on a job that was
+    never queued.
+    """
+    Failed: Set[str] = set()
     for Label, VolSearchDir in GetSimulationDirs(WorkDir, Params):
         if Label not in NewLabels:
             continue
@@ -245,25 +261,34 @@ def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> 
             print("  [{}] initial VASP job already submitted or done — skipped".format(Label))
             continue
         VaspCmd = ReadSchedulerCmd(VolSearchDir)
-        if not VaspCmd:
-            print("  [{}] WARNING: vaspcmd not set — skipped initial VASP submission".format(Label))
-            continue
+        Argv = VaspCmd + ["jobsub"]
+        Display = " ".join(VaspCmd)
         try:
             Result = subprocess.run(
-                [VaspCmd, "jobsub"],
+                Argv,
                 cwd=str(VolSearchDir),
                 capture_output=True,
                 text=True,
                 check=False,
             )
-            print("  [{}] {} jobsub → exit {}".format(Label, VaspCmd, Result.returncode))
+            print("  [{}] {} jobsub → exit {}".format(Label, Display, Result.returncode))
             if Result.stdout.strip():
                 print("  [{}]   {}".format(Label, Result.stdout.strip()))
+            if Result.returncode != 0:
+                if Result.stderr.strip():
+                    print("  [{}]   stderr: {}".format(Label, Result.stderr.strip()))
+                WriteMarker(VolSearchDir / "job.exit", "-1")
+                Failed.add(Label)
         except FileNotFoundError:
-            print("  [{}] WARNING: '{}' not on PATH — skipped initial VASP submission".format(
-                Label, VaspCmd))
+            print("  [{}] ERROR: '{}' not on PATH — initial VASP submission failed".format(
+                Label, VaspCmd[0]))
+            WriteMarker(VolSearchDir / "job.exit", "-1")
+            Failed.add(Label)
         except Exception as E:
-            print("  [{}] WARNING: initial VASP submission failed: {!r}".format(Label, E))
+            print("  [{}] ERROR: initial VASP submission failed: {!r}".format(Label, E))
+            WriteMarker(VolSearchDir / "job.exit", "-1")
+            Failed.add(Label)
+    return Failed
 
 
 # ---------------------------------------------------------------------------
@@ -319,8 +344,20 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
         return 1
 
     Procs: Dict[str, Tuple[subprocess.Popen, Path]] = {}
+    LaunchFailures = 0
+
+    # Tell the bundled volsearch_cont (and its csh helpers) where to find
+    # sluschipath, so the flow is self-contained and does not rely on
+    # ~/.sluschi.rc pointing at the in-repo SLUSCHI_mod directory.
+    Env = os.environ.copy()
+    Env["sguschipath"] = str(VOLSEARCH_CONT.parent)
 
     for Label, Vsd in PendingDirs:
+        # Clear stale terminal markers from a previous attempt so
+        # SimulationSummary doesn't report the restarted sim as FAILED/KILLED
+        # before volsearch_cont rewrites them at exit.
+        for Stale in ("job.exit", "job.killed"):
+            (Vsd / Stale).unlink(missing_ok=True)
         WriteMarker(Vsd / "job.started", datetime.now().isoformat())
         LogPath = Vsd.parent / "log.out"
         try:
@@ -330,12 +367,14 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
                 cwd=str(Vsd),
                 stdout=LogFile,
                 stderr=subprocess.STDOUT,
+                env=Env,
             )
             Procs[Label] = (Proc, Vsd)
             print("  [{}] volsearch_cont started (pid {})".format(Label, Proc.pid))
         except OSError as E:
             print("  [{}] ERROR launching volsearch_cont: {}".format(Label, E))
             WriteMarker(Vsd / "job.exit", "-1")
+            LaunchFailures += 1
 
     if not Procs:
         print("No volsearch_cont processes started.")
@@ -364,7 +403,7 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
             pass  # daemon is optional; don't abort if it fails
 
     # Wait for all processes
-    AllPassed = True
+    AllPassed = LaunchFailures == 0
     for Label, (Proc, Vsd) in Procs.items():
         RC = Proc.wait()
         WriteMarker(Vsd / "job.exit", str(RC))
@@ -381,6 +420,15 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
 # ---------------------------------------------------------------------------
 
 def main() -> int:
+    # Ensure non-ASCII status characters (em-dashes, arrows) survive on shells
+    # whose default encoding is not UTF-8 (notably Windows PowerShell, cp1252).
+    for Stream in (sys.stdout, sys.stderr):
+        if hasattr(Stream, "reconfigure"):
+            try:
+                Stream.reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
     Args = ParseArgs()
     WorkDir = Path(Args.workdir).resolve()
 
@@ -413,22 +461,33 @@ def main() -> int:
         return 0
 
     # Setup new folders
+    FailedLabels: Set[str] = set()
     if NewLabels:
         RunSetup(WorkDir, Params, NewLabels)
-        SubmitInitialVaspJobs(WorkDir, Params, NewLabels)
+        FailedLabels = SubmitInitialVaspJobs(WorkDir, Params, NewLabels)
+        if FailedLabels:
+            print("Initial VASP submission failed in: {}".format(", ".join(sorted(FailedLabels))))
+            print("  → these directories will NOT run volsearch_cont this session.")
 
-    # Collect pending dirs (after setup, new folders are now on disk)
+    # Collect pending dirs (after setup, new folders are now on disk).
+    # Exclude any label whose initial VASP submission failed — otherwise
+    # volsearch_cont would sit polling an OUTCAR that never arrives.
     PendingDirs = [
         (L, Vsd) for L, Vsd in GetSimulationDirs(WorkDir, Params)
-        if L in PendingLabels
+        if L in PendingLabels and L not in FailedLabels
     ]
 
     if not PendingDirs:
+        if FailedLabels:
+            print("All eligible simulations failed initial submission. Aborting.")
+            return 1
         print("All simulations are already done. Nothing to run.")
         return 0
 
     print("Starting volsearch_cont for {} simulation(s)...".format(len(PendingDirs)))
-    return RunOrchestration(WorkDir, Params, PendingDirs)
+    RC = RunOrchestration(WorkDir, Params, PendingDirs)
+    # Treat the overall run as failed if any initial submission also failed.
+    return 1 if (RC != 0 or FailedLabels) else 0
 
 
 if __name__ == "__main__":

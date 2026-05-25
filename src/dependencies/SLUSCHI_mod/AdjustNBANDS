@@ -1,6 +1,8 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
 $sluschipath/getinfo.csh adj_nbands job.in > /dev/null
 if ( $? == 0 ) then

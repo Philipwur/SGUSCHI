@@ -5,9 +5,11 @@ set submission_marker = .vasp_submitted_step
 set submission_log = .vasp_submit_last.out
 rm -f $failure_marker
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 if ( "$sluschipath" == "" ) then
-  echo FATAL volsearch_cont: could not read sluschipath from ~/.sluschi.rc.
+  echo FATAL volsearch_cont: could not resolve sluschipath from \$sguschipath env or ~/.sluschi.rc.
   touch $failure_marker
   exit 1
 endif

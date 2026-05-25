@@ -101,7 +101,7 @@ SGUSCHI wraps the SLUSCHI volume-search loop. `volsearch_cont` is a csh script t
 
 ```
 volsearch_cont (csh)
-    │  [startup] read ~/.sluschi.rc; set SIGMA/TEBEG/TEEND/NSW/SMASS in INCAR from job.in
+    │  [startup] resolve sluschipath (env var sguschipath set by SGUSCHI.py, else ~/.sluschi.rc); set SIGMA/TEBEG/TEEND/NSW/SMASS in INCAR from job.in
     │
     └─ loop: poll OUTCAR → job done
             ├─ compute pressure, run DetermineSize.x → lattice_predict.out
