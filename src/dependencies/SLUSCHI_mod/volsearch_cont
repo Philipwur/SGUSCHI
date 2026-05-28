@@ -107,10 +107,31 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
     endif
   endif
   if ( $_resubmit ) then
+    # Guard: if POSCAR was not yet rebuilt from CONTCAR before the kill, rebuild it now.
+    # Without this, resubmission would carry a WAVECAR (end-of-segment N geometry) while
+    # POSCAR still reflects the start-of-segment N geometry — the SCF divergence hazard.
+    set _built_for = ""
+    if ( -e poscar_built_for_step ) set _built_for = `cat poscar_built_for_step | tr -d '[:space:]'`
+    if ( "$_built_for" != "$nstep" ) then
+      if ( -s CONTCAR && -s lattice_predict.out ) then
+        head -2 CONTCAR > POSCAR
+        cat lattice_predict.out >> POSCAR
+        tail -n+6 CONTCAR >> POSCAR
+        if ( $? != 0 || ! -s POSCAR ) then
+          echo "FATAL volsearch_cont: failed to rebuild POSCAR from CONTCAR on restart for step $nstep."
+          touch $failure_marker
+          exit 1
+        endif
+        echo "INFO volsearch_cont: rebuilt POSCAR from CONTCAR on restart for step $nstep."
+      else
+        rm -f WAVECAR
+        echo "WARNING volsearch_cont: no CONTCAR or lattice_predict.out on restart for step $nstep; deleted WAVECAR for clean SCF."
+      endif
+    endif
     echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
     echo $nstep > $submission_marker
     rm -f $submission_log
-    $vaspcmd jobsub >>& $submission_log
+    ( $vaspcmd jobsub ) >>& $submission_log
     set submit_status = $?
     cat $submission_log >> jobsub.log
     if ( $submit_status != 0 ) then
@@ -138,6 +159,18 @@ while ($stopflag == 0)
     echo ====== JOB $nstep DONE ======
     rm -f $submission_marker
 
+    grep -s "BRMIX: very serious problems" OUTCAR > /dev/null
+    if ( $? == 0 ) then
+      echo "WARNING volsearch_cont: SCF divergence (BRMIX) detected in OUTCAR for step $nstep. Deleting WAVECAR."
+      rm -f WAVECAR
+    endif
+    grep -s "FEXCP" OUTCAR > /dev/null
+    if ( $? == 0 ) then
+      echo "WARNING volsearch_cont: FEXCP detected in OUTCAR for step $nstep. Deleting WAVECAR."
+      rm -f WAVECAR
+    endif
+
+
     @ natom = `grep 'NIONS =' OUTCAR | tail -1 | awk '{print $12}'`
     echo $natom > natom
 
@@ -151,7 +184,7 @@ while ($stopflag == 0)
       echo --- Calculate Pulay stress... ---
       $sluschipath/PressurePulay > /dev/null
       if ( $? != 0 ) then
-        echo WARNING volsearch_cont: PressurePulay failed; skipping pressure-controlled lattice update for this job.
+        echo "WARNING volsearch_cont: PressurePulay failed; skipping pressure-controlled lattice update for this job."
         @ pressure_fallback = 1
         set pressure_fallback_reason = "PressurePulay failed"
       endif
@@ -161,14 +194,14 @@ while ($stopflag == 0)
     if ( -s pressure_Pulay.out ) then
       set pressure_Pulay = `cat pressure_Pulay.out`
     else if ( $pressure_fallback == 0 ) then
-      echo WARNING volsearch_cont: pressure_Pulay.out is missing or empty; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure_Pulay.out is missing or empty; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure_Pulay.out is missing or empty"
     endif
 
     $sluschipath/GetPTE # get P, T and E
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: GetPTE failed; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: GetPTE failed; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "GetPTE failed"
     endif
@@ -176,7 +209,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     grep 'in kB' OUTCAR -B1 | grep -v 'in kB' | grep -v '\-\-' | grep -v CPU | grep -v cpu | awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF >= 7 {ok=1; for (i=2;i<=7;i++) if (isnum($i) == 0) ok=0; if (ok) print $2,$3,$4,$5,$6,$7}' > pressure3.out # get Pxx, Pyy, Pzz, Pxy, Pyz, Pzx
     if ( ! -s pressure3.out ) then
-      echo WARNING volsearch_cont: pressure3.out has no valid numeric stress rows after parsing OUTCAR; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure3.out has no valid numeric stress rows after parsing OUTCAR; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure3.out has no valid numeric stress rows"
     endif
@@ -184,7 +217,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} {if (NF != 6) bad=1; for (i=1;i<=NF;i++) if (isnum($i) == 0) bad=1; n++} END{if (bad || n < 1) exit 1}' pressure3.out
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: pressure3.out must contain only six-column numeric stress rows; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure3.out must contain only six-column numeric stress rows; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure3.out has malformed stress rows"
     endif
@@ -192,7 +225,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     set volume=`grep volume/ion OUTCAR | tail -1 | awk '{print $5}'`
     if ( "$volume" == "" ) then
-      echo WARNING volsearch_cont: could not extract volume/ion from OUTCAR; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: could not extract volume/ion from OUTCAR; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "could not extract volume/ion from OUTCAR"
     endif
@@ -200,7 +233,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk -v c="$volume" 'BEGIN{if (c+0 > 0) exit 0; exit 1}'
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: invalid volume/ion value $volume; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: invalid volume/ion value $volume; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "invalid volume/ion value"
     endif
@@ -208,7 +241,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     set temp=`grep TEEND INCAR | tail -1 | awk '{print $3}'`
     if ( "$temp" == "" ) then
-      echo WARNING volsearch_cont: could not extract TEEND from INCAR; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: could not extract TEEND from INCAR; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "could not extract TEEND from INCAR"
     endif
@@ -216,7 +249,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     set pressure_kinetic=`awk -v k="1.38e-23" -v a="1.0e22" -v b="$temp" -v c="$volume" 'BEGIN{if (c+0 <= 0 || b == "") exit 1; printf("%.5f\n", (k*b/c*a))}'`
     if ( $? != 0 || "$pressure_kinetic" == "" ) then
-      echo WARNING volsearch_cont: failed to calculate kinetic pressure; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: failed to calculate kinetic pressure; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "failed to calculate kinetic pressure"
     else
@@ -226,7 +259,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_kinetic.out
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: pressure_kinetic.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure_kinetic.out is missing or non-numeric; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure_kinetic.out is missing or non-numeric"
     endif
@@ -234,7 +267,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_Pulay.out
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: pressure_Pulay.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure_Pulay.out is missing or non-numeric; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure_Pulay.out is missing or non-numeric"
     endif
@@ -242,7 +275,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     set cell_volume = `grep 'volume of cell' OUTCAR | tail -1 | awk '{print $5}'`
     if ( "$cell_volume" == "" ) then
-      echo WARNING volsearch_cont: could not extract volume of cell from OUTCAR; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: could not extract volume of cell from OUTCAR; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "could not extract volume of cell from OUTCAR"
     endif
@@ -250,7 +283,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk -v v="$cell_volume" 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} BEGIN{gsub(/[Dd]/,"E",v); if (isnum(v) && v+0 > 0) exit 0; exit 1}'
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: invalid volume of cell value $cell_volume; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: invalid volume of cell value $cell_volume; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "invalid volume of cell value"
     else
@@ -261,7 +294,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     set pressure_target = `$sluschipath/getinfo.csh press job.in`
     if ( "$pressure_target" == "" ) then
-      echo WARNING volsearch_cont: missing press in job.in; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: missing press in job.in; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "missing press in job.in"
     else
@@ -271,7 +304,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {if (isnum($1) == 0) bad=1; n=1; exit} END{if (bad || n < 1) exit 1}' pressure_target.out
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: pressure_target.out is missing or non-numeric; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: pressure_target.out is missing or non-numeric; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "pressure_target.out is missing or non-numeric"
     endif
@@ -279,7 +312,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     awk 'function isnum(x){return x ~ /^[+-]?(([0-9]+[.]?[0-9]*)|([.][0-9]+))([EeDd][+-]?[0-9]+)?$/} NF > 0 {last=$1; seen=1} END{gsub(/[Dd]/,"E",last); if (seen < 1 || isnum(last) == 0 || last+0 <= 0) exit 1}' volume.out
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: volume.out is missing or its last value is invalid; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: volume.out is missing or its last value is invalid; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "volume.out is missing or its last value is invalid"
     endif
@@ -288,7 +321,7 @@ while ($stopflag == 0)
     if ( $pressure_fallback == 0 ) then
     $sluschipath/PressureAvg.x 
     if ( $? != 0 || ! -s pressure3_total.out ) then
-      echo WARNING volsearch_cont: PressureAvg.x failed or did not create pressure3_total.out; skipping pressure-controlled lattice update for this job.
+      echo "WARNING volsearch_cont: PressureAvg.x failed or did not create pressure3_total.out; skipping pressure-controlled lattice update for this job."
       @ pressure_fallback = 1
       set pressure_fallback_reason = "PressureAvg.x failed"
     endif
@@ -306,7 +339,7 @@ while ($stopflag == 0)
       set p = `cat pressure3_total.out`
       @ pcount = `echo $p | awk '{print NF}'`
       if ( $pcount != 6 ) then
-        echo WARNING volsearch_cont: pressure3_total.out does not contain six pressure components; skipping pressure-controlled lattice update for this job.
+        echo "WARNING volsearch_cont: pressure3_total.out does not contain six pressure components; skipping pressure-controlled lattice update for this job."
         @ pressure_fallback = 1
         set pressure_fallback_reason = "pressure3_total.out does not contain six pressure components"
         set p = "0.000000 0.000000 0.000000 0.000000 0.000000 0.000000"
@@ -320,7 +353,7 @@ while ($stopflag == 0)
     set pyz = `echo $p | awk '{print $5}'`
     set pxz = `echo $p | awk '{print $6}'`
     if ( $pressure_fallback == 1 ) then
-      echo WARNING volsearch_cont: pressure update skipped for JOB $nstep \($pressure_fallback_reason\); current lattice will be reused.
+      echo "WARNING volsearch_cont: pressure update skipped for JOB $nstep ($pressure_fallback_reason); current lattice will be reused."
     else
       echo $v1 $v2 $v3 $p >> lattice_pressure_history.out
       echo Pulay stress $pressure_Pulay, kinetic pressure $pressure_kinetic, pressure target $pressure_target kbar.
@@ -369,15 +402,15 @@ while ($stopflag == 0)
     echo --- ADJUST INCAR TAGS ---
     $sluschipath/AdjustPOTIM
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: AdjustPOTIM failed; keeping current POTIM.
+      echo "WARNING volsearch_cont: AdjustPOTIM failed; keeping current POTIM."
     endif
     $sluschipath/AdjustNBANDS
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: AdjustNBANDS failed; keeping current NBANDS/default.
+      echo "WARNING volsearch_cont: AdjustNBANDS failed; keeping current NBANDS/default."
     endif
     $sluschipath/AdjustBMIX
     if ( $? != 0 ) then
-      echo WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX.
+      echo "WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX."
     endif
     mkdir $nstep
     if ( $? != 0 ) then
@@ -577,15 +610,16 @@ while ($stopflag == 0)
       
       python "$sluschipath/../../workflow/OxidationStep.py"
       if ( $? != 0 ) then
-        echo FATAL volsearch_cont: OxidationStep.py failed; no new job submitted.
+        echo "FATAL volsearch_cont: OxidationStep.py failed; no new job submitted."
         touch $failure_marker
         exit 1
       endif
 
       set nextstep = `expr $nstep + 1`
+      echo $nextstep > poscar_built_for_step
       echo $nextstep > $submission_marker
       rm -f $submission_log
-      $vaspcmd jobsub >>& $submission_log
+      ( $vaspcmd jobsub ) >>& $submission_log
       set submit_status = $?
       cat $submission_log >> jobsub.log
       if ( $submit_status != 0 ) then
