@@ -107,6 +107,8 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
     endif
   endif
   if ( $_resubmit ) then
+    # Clean up any stale Dir_Pressure_Pulay left by a kill during PressurePulay.
+    if ( -d Dir_Pressure_Pulay ) rm -rf Dir_Pressure_Pulay
     # Guard: if POSCAR was not yet rebuilt from CONTCAR before the kill, rebuild it now.
     # Without this, resubmission would carry a WAVECAR (end-of-segment N geometry) while
     # POSCAR still reflects the start-of-segment N geometry — the SCF divergence hazard.
