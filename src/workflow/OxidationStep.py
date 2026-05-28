@@ -318,11 +318,11 @@ def main(WorkDir = None, TestCase = False):
         Gasses = Gasses.copy()
         Gasses["Molecule"] = Gasses["Molecule"].apply(lambda M: tuple(M) if not isinstance(M, tuple) else M)
 
-    _atom_count_before_removal = len(Position)
+    AtomsBeforeRemoval = len(Position)
     Position, Velocity = an.RemoveNonO2Gasses(Position,
                                                 Velocity,
                                                 Gasses)
-    if len(Position) != _atom_count_before_removal:
+    if len(Position) != AtomsBeforeRemoval:
         if not TestCase and os.path.exists(f'{WorkDir}/WAVECAR'):
             os.remove(f'{WorkDir}/WAVECAR')
 
