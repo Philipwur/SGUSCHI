@@ -401,7 +401,7 @@ def CalculateGasFraction(Position: pd.DataFrame, GasRatio: float,
     XCoordinates = Position.loc[Position['Element'] == 'Zr', 'x'].to_numpy()
 
     # Sort and compute nearest-neighbor gaps with PBC wrap-around
-    XCoordinates.sort()
+    XCoordinates = np.sort(XCoordinates)
     Diffs = np.diff(XCoordinates)
     WrapDistance = 1.0 - XCoordinates[-1] + XCoordinates[0]
 
