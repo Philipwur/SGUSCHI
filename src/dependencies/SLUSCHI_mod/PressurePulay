@@ -20,7 +20,7 @@ $sluschipath/UpdateINCAR NELM 400
 $sluschipath/UpdateINCAR EDIFF 1E-6
 
 sed -i '/ML_ISTART/d' INCAR
-$vaspcmd jobsub >> jobsub.log
+($vaspcmd jobsub >> jobsub.log) >& /dev/null
 
 @ jobdone = 0
 while ( ! $jobdone )
@@ -42,7 +42,7 @@ sed -i '/ENCUT/d' INCAR
 $sluschipath/UpdateINCAR ALGO A
 echo TIME = 0.03 >> INCAR
 $sluschipath/UpdateINCAR SYMPREC 1e-10
-$vaspcmd jobsub >> jobsub.log
+($vaspcmd jobsub >> jobsub.log) >& /dev/null
 rm OUTCAR
 
 @ jobdone = 0
