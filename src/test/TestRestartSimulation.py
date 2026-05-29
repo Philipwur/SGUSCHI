@@ -193,6 +193,21 @@ def TestCorruptPoscarFirstBadStepPicksPriorClean(TmpPath: Path) -> None:
     assert (TmpPath / "poscar_built_for_step").read_text(encoding="utf-8") == "3"
 
 
+def TestRollbackWritesNoteToLogOut(TmpPath: Path) -> None:
+    VolDir = TmpPath / "873_1" / "Dir_VolSearch"
+    VolDir.mkdir(parents=True)
+    WritePoscar(VolDir / "POSCAR", Lattice=CorruptLattice)
+    MakeSteps(VolDir, CleanSteps=[1, 2, 3])
+
+    RecoverFailedSimulation(VolDir, Log=lambda _m: None, RollbackFn=lambda d, t: None)
+
+    LogPath = VolDir.parent / "log.out"   # the {label} folder, one above Dir_VolSearch
+    assert LogPath.exists()
+    Text = LogPath.read_text(encoding="utf-8")
+    assert "Automatic rollback addressed" in Text
+    assert "clean step 3" in Text
+
+
 def TestCorruptPoscarNoCleanStepRaises(TmpPath: Path) -> None:
     WritePoscar(TmpPath / "POSCAR", Lattice=CorruptLattice)
     MakeSteps(TmpPath, CleanSteps=[], CorruptSteps=[1, 2])

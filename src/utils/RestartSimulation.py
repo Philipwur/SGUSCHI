@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
@@ -44,6 +45,22 @@ MinCellVolume = 1.0e-6
 
 class RecoveryError(Exception):
     """Raised when a corrupted POSCAR is found but cannot be safely recovered."""
+
+
+def _AppendToLog(VolSearchDir: Path, Message: str) -> None:
+    """Append a timestamped note to the per-simulation log.out, which lives one
+    level above Dir_VolSearch (the {Temperature}_{SimIndex} folder). Matches the
+    delimiter format RollbackTrajectory writes so manual and automatic rollbacks
+    look the same in the log. Best-effort: never raises."""
+    LogPath = VolSearchDir.parent / "log.out"
+    Timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with open(LogPath, "a", encoding="utf-8") as Handle:
+            Handle.write("\n" + "-" * 80 + "\n")
+            Handle.write("[{}] {}\n".format(Timestamp, Message))
+            Handle.write("-" * 80 + "\n")
+    except OSError:
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +410,12 @@ def RecoverFailedSimulation(
     (VolSearchDir / ".vasp_submitted_step").unlink(missing_ok=True)
     (VolSearchDir / "poscar_built_for_step").write_text(str(Restart), encoding="utf-8")
     FailedMarker.unlink(missing_ok=True)
+
+    _AppendToLog(
+        VolSearchDir,
+        "Automatic rollback addressed: corrupted POSCAR ({}). Rolled back to "
+        "clean step {} and resubmitting from its geometry.".format(Reason, Restart),
+    )
 
     return "rolled back to clean step {} (corruption: {})".format(Restart, Reason)
 
