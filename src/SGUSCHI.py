@@ -346,6 +346,17 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     Procs: Dict[str, Tuple[subprocess.Popen, Path]] = {}
     LaunchFailures = 0
 
+    # Make the bundled recovery helper importable.
+    if str(SRC_DIR) not in sys.path:
+        sys.path.insert(0, str(SRC_DIR))
+    try:
+        from utils.RestartSimulation import RecoverFailedSimulation, RecoveryError
+    except ImportError as E:
+        print("WARNING: could not import RestartSimulation ({}); "
+              "automatic recovery disabled.".format(E))
+        RecoverFailedSimulation = None  # type: ignore[assignment]
+        RecoveryError = Exception       # type: ignore[assignment]
+
     # Tell the bundled volsearch_cont (and its csh helpers) where to find
     # sluschipath, so the flow is self-contained and does not rely on
     # ~/.sluschi.rc pointing at the in-repo SLUSCHI_mod directory.
@@ -353,6 +364,25 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     Env["sguschipath"] = str(VOLSEARCH_CONT.parent)
 
     for Label, Vsd in PendingDirs:
+        # Attempt automatic recovery from a corrupted/failed prior run before
+        # relaunching. A corrupted POSCAR with no clean step to fall back to is
+        # fatal for this dir: skip it rather than resubmit a broken lattice.
+        if RecoverFailedSimulation is not None:
+            try:
+                Action = RecoverFailedSimulation(
+                    Vsd, Log=lambda M, L=Label: print("  [{}]{}".format(L, M))
+                )
+                if Action:
+                    print("  [{}] recovery: {}".format(Label, Action))
+            except RecoveryError as E:
+                print("  [{}] ERROR: automatic recovery failed: {}".format(Label, E))
+                WriteMarker(Vsd / "job.exit", "-1")
+                LaunchFailures += 1
+                continue
+            except Exception as E:
+                print("  [{}] WARNING: recovery check raised {!r}; launching as-is".format(
+                    Label, E))
+
         # Clear stale terminal markers from a previous attempt so
         # SimulationSummary doesn't report the restarted sim as FAILED/KILLED
         # before volsearch_cont rewrites them at exit.

@@ -39,7 +39,9 @@ def TestVolsearchContStopsBeforeSubmittingAfterCriticalFailures() -> None:
 
     assert "DetermineSize.x failed" in Text
     assert "OxidationStep.py failed; no new job submitted" in Text
-    assert Text.index("OxidationStep.py failed; no new job submitted") < Text.index("$vaspcmd jobsub")
+    # rindex targets the main-loop submission; the first "$vaspcmd jobsub" is now
+    # the startup-guard resubmission, which sits earlier in the file by design.
+    assert Text.index("OxidationStep.py failed; no new job submitted") < Text.rindex("$vaspcmd jobsub")
 
 
 def TestVolsearchContRecoversFromPressureUpdateFailures() -> None:
@@ -57,7 +59,7 @@ def TestVolsearchContRecoversFromPressureUpdateFailures() -> None:
     assert "DetermineSize.x skipped" in Text
     assert "VolSearchStop.x skipped" in Text
     assert "current lattice will be reused" in Text
-    assert Text.index("PressureAvg.x failed or did not create pressure3_total.out") < Text.index("$vaspcmd jobsub")
+    assert Text.index("PressureAvg.x failed or did not create pressure3_total.out") < Text.rindex("$vaspcmd jobsub")
 
 
 def TestVolsearchContWarnsOnIncarAdjustmentFailures() -> None:
