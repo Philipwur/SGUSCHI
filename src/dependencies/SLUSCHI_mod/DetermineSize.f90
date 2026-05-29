@@ -75,6 +75,7 @@ implicit none
   integer i
   integer navg
 
+  avg = 0.d0
   do i=1,navg
     if (ndim-navg+i>0) then
       avg = avg + x(ndim-navg+i)
