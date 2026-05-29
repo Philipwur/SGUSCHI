@@ -116,6 +116,11 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
     if ( -e poscar_built_for_step ) set _built_for = `cat poscar_built_for_step | tr -d '[:space:]'`
     if ( "$_built_for" != "$nstep" ) then
       if ( -s CONTCAR && -s lattice_predict.out ) then
+        grep -sq "\*\*\*" lattice_predict.out
+        if ( $? == 0 ) then
+          echo "WARNING volsearch_cont: lattice_predict.out contains overflow values (***) on restart; using CONTCAR lattice instead."
+          head -5 CONTCAR | tail -3 > lattice_predict.out
+        endif
         head -2 CONTCAR > POSCAR
         cat lattice_predict.out >> POSCAR
         tail -n+6 CONTCAR >> POSCAR
@@ -398,6 +403,11 @@ while ($stopflag == 0)
         echo FATAL volsearch_cont: DetermineSize.x failed or did not create lattice_predict.out.
         touch $failure_marker
         exit 1
+      endif
+      grep -sq "\*\*\*" lattice_predict.out
+      if ( $? == 0 ) then
+        echo "WARNING volsearch_cont: DetermineSize.x produced overflow values (***) for step $nstep; falling back to current CONTCAR lattice."
+        head -5 CONTCAR | tail -3 > lattice_predict.out
       endif
     endif
     
