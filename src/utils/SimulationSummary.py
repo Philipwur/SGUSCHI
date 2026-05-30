@@ -19,12 +19,19 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
+# Make the project's src/ importable when this scanner runs as a standalone
+# script (sys.path[0] is then src/utils); a no-op when imported as a package.
+_SrcDir = str(Path(__file__).resolve().parents[1])
+if _SrcDir not in sys.path:
+    sys.path.append(_SrcDir)
+
+from utils.FolderUtils import NumericStepFolders
+
 
 SUMMARY_TXT = Path("SimulationSummary")
 SUMMARY_TSV = Path("logs") / "SimulationSummary.tsv"
 EXPECTED_PATH = Path(".simulation_summary") / "expected.tsv"
 SIMULATION_RE = re.compile(r"^\d+_\d+$")
-FATAL_RE = re.compile(r"\bFATAL\b", flags=re.IGNORECASE)
 
 
 @dataclass
@@ -53,10 +60,10 @@ SUMMARY_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("Folders",          "Folders"),
     ("Latest",           "Latest"),
     ("RateRows",         "RateRows"),
-    ("SimTime_ps",       "SimTime_ps"),
-    ("TotalO2Added",     "TotalO2Added"),
-    ("MoleculesRemoved", "MoleculesRemoved"),
-    ("WallTime",         "WallTime"),
+    ("SimTime_ps",       "Time_ps"),
+    ("TotalO2Added",     "O2Added"),
+    ("MoleculesRemoved", "GasRemoved"),
+    ("WallTime",         "Wall"),
     ("Done",             "Done"),
     ("Failed",           "Failed"),
     ("Detail",           "Detail"),
@@ -164,17 +171,6 @@ def NaturalSortKey(Text: str) -> Tuple:
     return tuple(Key)
 
 
-def NumericStepFolders(WorkDir: Path) -> List[int]:
-    """Return numeric step folders found in a Dir_VolSearch directory."""
-    if not WorkDir.is_dir():
-        return []
-    return sorted(
-        int(Child.name)
-        for Child in WorkDir.iterdir()
-        if Child.is_dir() and Child.name.isdigit()
-    )
-
-
 def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str, str, str]:
     """Return compact RateAnalysis metrics without importing pandas."""
     RatePath = WorkDir / "RateAnalysis.csv"
@@ -266,27 +262,6 @@ def FormatPicoseconds(Value: str) -> str:
     return f"{Number:.6f}".rstrip("0").rstrip(".")
 
 
-def LatestFatalDetail(Paths: Sequence[Path]) -> Optional[str]:
-    """Find the most recent fatal line in small tail windows of log files."""
-    LatestLine: Optional[str] = None
-    LatestMtime = -1.0
-
-    for PathFile in Paths:
-        if not PathFile.exists() or not PathFile.is_file():
-            continue
-        try:
-            Text = ReadTail(PathFile)
-            Mtime = PathFile.stat().st_mtime
-        except OSError:
-            continue
-        for Line in Text.splitlines():
-            if FATAL_RE.search(Line) and Mtime >= LatestMtime:
-                LatestLine = " ".join(Line.strip().split())
-                LatestMtime = Mtime
-
-    return Truncate(LatestLine, 58) if LatestLine else None
-
-
 def ReadJobMarkers(WorkDir: Path) -> Tuple[Optional[float], Optional[int], bool]:
     """Read job.started / job.exit / job.killed written by SGUSCHI.py.
 
@@ -313,16 +288,6 @@ def ReadJobMarkers(WorkDir: Path) -> Tuple[Optional[float], Optional[int], bool]
             ExitCode = -1
 
     return StartedMtime, ExitCode, WasKilled
-
-
-def ReadTail(PathFile: Path, MaxBytes: int = 32768) -> str:
-    """Read the tail of a text file."""
-    Size = PathFile.stat().st_size
-    with PathFile.open("rb") as File:
-        if Size > MaxBytes:
-            File.seek(Size - MaxBytes)
-        Data = File.read()
-    return Data.decode("utf-8", errors="ignore")
 
 
 def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
@@ -381,13 +346,12 @@ def FormatDuration(Seconds: float) -> str:
 def DetermineStatus(
     WorkDir: Path,
     StepFolders: Sequence[int],
-    FatalDetail: Optional[str],
 ) -> Tuple[str, str, str, str]:
     """Return status, done flag, failed flag, and detail."""
     if not WorkDir.exists():
-        return "MISSING", "N", "Y", "Dir_VolSearch missing"
+        return "MISSING", "N", "Y", "missing"
     if not WorkDir.is_dir():
-        return "MISSING", "N", "Y", "Dir_VolSearch is not a directory"
+        return "MISSING", "N", "Y", "not a directory"
 
     FailedMarker = WorkDir / "sguschi_failed"
     DoneMarker = WorkDir / "volsearch_is_done"
@@ -395,37 +359,35 @@ def DetermineStatus(
 
     if DoneMarker.exists():
         MaxRuntimeMarker = WorkDir / "maxruntime_reached"
-        Detail = "MaxRuntime reached" if MaxRuntimeMarker.exists() else "volsearch_is_done"
+        Detail = "max runtime" if MaxRuntimeMarker.exists() else "done"
         return "DONE", "Y", "N", Detail
     if VaspState == "queued":
-        return "RUNNING", "N", "N", "OUTCAR empty, VASP job queued"
+        return "RUNNING", "N", "N", "queued"
     if FailedMarker.exists():
         return "FAILED", "N", "Y", "sguschi_failed"
-    if FatalDetail:
-        return "FAILED", "N", "Y", FatalDetail
 
     # scheduler-neutral markers written by SGUSCHI.py
     _StartedMtime, _ExitCode, _WasKilled = ReadJobMarkers(WorkDir)
     if _WasKilled:
-        return "KILLED", "N", "Y", "job.killed"
+        return "KILLED", "N", "Y", "killed"
     if _ExitCode is not None:
         if _ExitCode == 0:
-            return "DONE", "Y", "N", "job.exit=0"
-        return "FAILED", "N", "Y", "job.exit={}".format(_ExitCode)
+            return "DONE", "Y", "N", "exit 0"
+        return "FAILED", "N", "Y", "exit {}".format(_ExitCode)
     if _StartedMtime is not None:
-        return "RUNNING", "N", "N", "job.started present"
+        return "RUNNING", "N", "N", "started"
 
     RecentActivity = LatestActivityTime(WorkDir)
     if VaspState == "stuck":
         if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
-            return "RUNNING", "N", "N", "OUTCAR empty, VASP starting up"
-        return "STUCK", "N", "N", "OUTCAR empty, no VASP job submitted — restart OxidationMaster"
+            return "RUNNING", "N", "N", "starting up"
+        return "STUCK", "N", "N", "no VASP job; restart master"
 
     if RecentActivity and (time.time() - RecentActivity) <= 2 * 3600:
-        return "RUNNING", "N", "N", "recent file activity"
+        return "RUNNING", "N", "N", "recent activity"
     if not StepFolders:
-        return "NOT_STARTED", "N", "N", "no step folders"
-    return "UNKNOWN", "N", "N", "no done/failure marker"
+        return "NOT_STARTED", "N", "N", "no steps"
+    return "UNKNOWN", "N", "N", "no marker"
 
 
 def LatestActivityTime(WorkDir: Path) -> Optional[float]:
@@ -483,8 +445,7 @@ def CheckVaspState(WorkDir: Path, StepFolders: Sequence[int]) -> Optional[str]:
 def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     """Build one summary row."""
     StepFolders = NumericStepFolders(WorkDir)
-    FatalDetail = LatestFatalDetail([WorkDir.parent / "log.out", WorkDir / "jobsub.log"])
-    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders, FatalDetail)
+    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders)
     RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
@@ -511,15 +472,6 @@ def BuildSummary(
     RootDir = RootDir.resolve()
     Simulations = DiscoverSimulations(RootDir, OxParamsPath)
     return [BuildRow(Label, WorkDir) for Label, WorkDir in Simulations]
-
-
-def Truncate(Value: Optional[str], MaxLen: int) -> str:
-    """Truncate text for the fixed-width table."""
-    if not Value:
-        return "-"
-    if len(Value) <= MaxLen:
-        return Value
-    return Value[: MaxLen - 3] + "..."
 
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:

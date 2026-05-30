@@ -13,6 +13,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
+from utils.FolderUtils import NumericStepFolders, TrajectoryRoot
 from workflow import OxidationAnalysis as an
 from workflow.OxidationStep import ExponentialSmoothing, CreateGassesRemovedStr
 
@@ -55,8 +56,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
         WorkDir = os.getcwd()
 
     WorkDir = Path(WorkDir).resolve()
-    RootDir = WorkDir.parents[1]
-    TrajectoryName = WorkDir.parent.name
+    RootDir, TrajectoryName = TrajectoryRoot(WorkDir)
 
     # ------------------------ Read hyperparameters ------------------------
 
@@ -124,11 +124,7 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
 
     # --------------------- Get all numbered step folders ---------------------
 
-    StepFolders = sorted(
-        int(Directory.name)
-        for Directory in WorkDir.iterdir()
-        if Directory.is_dir() and Directory.name.isdigit()
-    )
+    StepFolders = NumericStepFolders(WorkDir)
 
     if not StepFolders:
         RateAnalysisPathWorkDir = WorkDir / "RateAnalysis.csv"
@@ -278,8 +274,6 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
             ignore_index=True,
         )
         
-    # Drop the final row to allow OxidationStep to append latest simulation when run from folder (this is incorrect)
-    #RateAnalysis.drop(index=RateAnalysis.index[-1],axis=0,inplace=True)
     
     # ---------------------------- Write results out ----------------------------
 

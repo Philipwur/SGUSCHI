@@ -147,7 +147,7 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
         echo "WARNING volsearch_cont: startup resubmission timed out after Slurm may have accepted the job. Waiting for job $nstep."
       else
         rm -f $submission_marker
-        echo "FATAL volsearch_cont: resubmission at startup failed."
+        echo "FATAL volsearch_cont: resubmission at startup failed. See $submission_log for the scheduler error."
         touch $failure_marker
         exit 1
       endif
@@ -640,7 +640,7 @@ while ($stopflag == 0)
           echo WARNING volsearch_cont: job submission timed out after Slurm may have accepted the job. Waiting for job $nextstep.
         else
           rm -f $submission_marker
-          echo FATAL volsearch_cont: job submission command failed.
+          echo FATAL volsearch_cont: job submission command failed. See $submission_log for the scheduler error.
           touch $failure_marker
           exit 1
         endif

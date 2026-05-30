@@ -106,20 +106,6 @@ def TestFailedSimulationMarkerIsDetected(RootDir: Path) -> None:
     assert Row.Detail == "sguschi_failed"
 
 
-def TestFailedSimulationFatalLogIsDetected(RootDir: Path) -> None:
-    """A FATAL line in log.out should produce FAILED status."""
-    WorkDir = MakeWorkDir(RootDir, "873_3")
-    (WorkDir.parent / "log.out").write_text(
-        "normal line\nFATAL volsearch_cont: AdjustBMIX failed.\n",
-        encoding="utf-8",
-    )
-
-    Row = FindRow(Summary.BuildSummary(RootDir), "873_3")
-
-    assert Row.Status == "FAILED"
-    assert "AdjustBMIX failed" in Row.Detail
-
-
 def TestDoneMarkerOverridesOlderFatalLog(RootDir: Path) -> None:
     """Completed trajectories should not stay failed because of recoverable helper FATAL text."""
     WorkDir = MakeWorkDir(RootDir, "873_4")
@@ -138,7 +124,33 @@ def TestDoneMarkerOverridesOlderFatalLog(RootDir: Path) -> None:
     assert Row.Status == "DONE"
     assert Row.Done == "Y"
     assert Row.Failed == "N"
-    assert Row.Detail == "volsearch_is_done"
+    assert Row.Detail == "done"
+
+
+def TestRestartedRunIgnoresPreviousRunFatalLog(RootDir: Path) -> None:
+    """A FATAL line from a prior run must not mark a restarted, running sim FAILED.
+
+    log.out is appended to (not truncated) across restarts, so a previous run's
+    FATAL line lingers in the log. Failure is determined solely by the
+    self-clearing sguschi_failed marker (cleared on restart), not by scanning the
+    log for FATAL text, so a running sim with job.started present stays RUNNING.
+    """
+    WorkDir = MakeWorkDir(RootDir, "1073_2")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "OUTCAR").write_text("running\n", encoding="utf-8")
+    (WorkDir / "job.started").write_text("2026-05-30T12:00:00", encoding="utf-8")
+
+    # Stale FATAL from the previous, failed run still sitting in the log.
+    (WorkDir.parent / "log.out").write_text(
+        "FATAL volsearch_cont: AdjustBMIX failed.\n"
+        "INFO volsearch_cont: continuing run\n",
+        encoding="utf-8",
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "1073_2")
+
+    assert Row.Status == "RUNNING"
+    assert Row.Failed == "N"
 
 
 def TestNotStartedSimulationIsDetected(RootDir: Path) -> None:
@@ -148,7 +160,7 @@ def TestNotStartedSimulationIsDetected(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir), "973_1")
 
     assert Row.Status == "NOT_STARTED"
-    assert Row.Detail == "no step folders"
+    assert Row.Detail == "no steps"
 
 
 def TestRunningSimulationWithoutStepFoldersIsDetected(RootDir: Path) -> None:
@@ -159,7 +171,7 @@ def TestRunningSimulationWithoutStepFoldersIsDetected(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir), "973_2")
 
     assert Row.Status == "RUNNING"
-    assert Row.Detail == "recent file activity"
+    assert Row.Detail == "recent activity"
 
 
 def TestMissingExpectedSimulationIsDetected(RootDir: Path) -> None:
@@ -170,7 +182,7 @@ def TestMissingExpectedSimulationIsDetected(RootDir: Path) -> None:
 
     assert Row.Status == "MISSING"
     assert Row.Folders == "-"
-    assert Row.Detail == "Dir_VolSearch missing"
+    assert Row.Detail == "missing"
 
 
 def TestOxParamsExpectedSimulationsAreDetected(RootDir: Path) -> None:
@@ -268,10 +280,10 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     assert "873_1" in Text
     assert (RootDir / "logs").is_dir()
     assert "Simulation\tStatus" in Tsv
-    assert "SimTime_ps" in Text
+    assert "Time_ps" in Text
     assert "SimTime_fs" not in Tsv
-    assert "TotalO2Added" in Text
-    assert "MoleculesRemoved" in Tsv
+    assert "O2Added" in Text
+    assert "GasRemoved" in Tsv
 
 
 def TestSummaryOutputsUseCurrentSchema(RootDir: Path) -> None:
@@ -287,8 +299,8 @@ def TestSummaryOutputsUseCurrentSchema(RootDir: Path) -> None:
 
     Text = (RootDir / "SimulationSummary").read_text(encoding="utf-8")
     Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
-    assert "TotalO2Added" in Text
-    assert "MoleculesRemoved" in Tsv
+    assert "O2Added" in Text
+    assert "GasRemoved" in Tsv
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:
@@ -330,7 +342,7 @@ def TestWatchDaemonPassesParentPid(monkeypatch: pytest.MonkeyPatch, RootDir: Pat
 
 
 def TestMaxRuntimeReachedDetailIsShown(RootDir: Path) -> None:
-    """volsearch_is_done + maxruntime_reached should produce DONE with 'MaxRuntime reached' detail."""
+    """volsearch_is_done + maxruntime_reached should produce DONE with 'max runtime' detail."""
     WorkDir = MakeWorkDir(RootDir, "873_1")
     (WorkDir / "volsearch_is_done").write_text("", encoding="utf-8")
     (WorkDir / "maxruntime_reached").write_text("", encoding="utf-8")
@@ -339,7 +351,7 @@ def TestMaxRuntimeReachedDetailIsShown(RootDir: Path) -> None:
 
     assert Row.Status == "DONE"
     assert Row.Done == "Y"
-    assert Row.Detail == "MaxRuntime reached"
+    assert Row.Detail == "max runtime"
 
 
 def TestExampleOxidationMasterStartsSummaryDaemon() -> None:
@@ -355,3 +367,26 @@ def TestExampleOxidationMasterStartsSummaryDaemon() -> None:
     # OxidationMaster is now a thin Slurm wrapper that calls SGUSCHI.py
     MasterText = (RootDir / "example" / "OxidationMaster").read_text(encoding="utf-8")
     assert "SGUSCHI.py" in MasterText
+
+
+def TestExistingSummaryDocumentHeadersAreMigrated(RootDir: Path) -> None:
+    """An existing summary document with old long headers is rewritten on refresh."""
+    MakeWorkDir(RootDir, "873_1")
+
+    TextPath = RootDir / Summary.SUMMARY_TXT
+    TsvPath = RootDir / Summary.SUMMARY_TSV
+    TsvPath.parent.mkdir(parents=True, exist_ok=True)
+    # Seed both documents with the previous, long header names.
+    OldHeaders = "Simulation\tStatus\tFolders\tLatest\tRateRows\tSimTime_ps\t" \
+        "TotalO2Added\tMoleculesRemoved\tWallTime\tDone\tFailed\tDetail"
+    TsvPath.write_text(OldHeaders + "\n", encoding="utf-8")
+    TextPath.write_text(OldHeaders + "\n", encoding="utf-8")
+
+    Summary.WriteSummaryOnce(RootDir, Quiet=True)
+
+    TsvText = TsvPath.read_text(encoding="utf-8")
+    TextText = TextPath.read_text(encoding="utf-8")
+    for Document in (TsvText, TextText):
+        assert "O2Added" in Document and "TotalO2Added" not in Document
+        assert "GasRemoved" in Document and "MoleculesRemoved" not in Document
+        assert "Time_ps" in Document and "SimTime_ps" not in Document

@@ -10,6 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from utils.FixXYZ import FixXYZ
 from utils.FixRateAnalysis import FixRateAnalysis
+from utils.FolderUtils import NumericStepFolders
 
 '''
 -------------------------------------------------------------------------------
@@ -70,10 +71,7 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
     shutil.copy(SourcePoscar, DestPoscar)
 
     # 3. Identify and Delete Future Folders
-    StepFolders = [
-        int(d.name) for d in WorkDir.iterdir() 
-        if d.is_dir() and d.name.isdigit()
-    ]
+    StepFolders = NumericStepFolders(WorkDir)
     
     # We keep TargetStep, we delete everything strictly greater than it
     FoldersToRemove = [step for step in StepFolders if step > TargetStep]

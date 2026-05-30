@@ -11,6 +11,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
+from utils.FolderUtils import NumericStepFolders, TrajectoryRoot
 
 
 '''
@@ -52,19 +53,13 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
         WorkDir = os.getcwd()
 
     WorkDir = Path(WorkDir).resolve()
-    RootDir = WorkDir.parents[1]
-    TrajectoryName = WorkDir.parent.name
+    RootDir, TrajectoryName = TrajectoryRoot(WorkDir)
 
     XYZDir = RootDir / "xyz_files"
     XYZDir.mkdir(parents=True, exist_ok=True)
     XYZPath = XYZDir / f"{TrajectoryName}.xyz"
 
-    # Collect numbered step folders
-    StepFolders = sorted(
-        int(Directory.name)
-        for Directory in WorkDir.iterdir()
-        if Directory.is_dir() and Directory.name.isdigit()
-    )
+    StepFolders = NumericStepFolders(WorkDir)
 
     if not StepFolders:
         raise FileNotFoundError(

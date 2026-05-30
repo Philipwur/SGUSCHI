@@ -4,111 +4,11 @@
 
 import pandas as pd
 import numpy as np
-import scipy.stats as stats
 import scipy.optimize as opt
 from typing import Dict, List, Tuple, Optional, Union, Set
 
 
 
-# Graveyard for now
-
-def ConvertCartesianToDirect(Position: pd.DataFrame, CellDim: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert Cartesian coordinates (Å) to direct (fractional, unitless).
-    Overwrites Position[['x','y','z']] in-place and returns Position.
-    """
-    CellMatrix = CellDim.to_numpy()
-    InvCellMatrix = np.linalg.inv(CellMatrix)
-    Cartesian = Position[['x', 'y', 'z']].to_numpy()
-    Direct = Cartesian @ InvCellMatrix
-    Position[['x', 'y', 'z']] = Direct
-    return Position
-
-
-# Check where this is used, this doesn't seem done lol
-def CalculateScaleThickness(Position, CellDim, AtomicRadiusTol):
-    BondMatrix = FindGases(Position, 
-                           CellDim, 
-                           AtomicRadiusTol = AtomicRadiusTol,
-                           ReturnBondMatrix = True)
-    return BondMatrix
-
-
-def CalculatePartialPressure(O2Molecules, Temp, GasVolume):
-    
-    R = 8.314462
-    Na = 6.022 * 10**23
-    atm = 101325
-
-    PartialPressure = (O2Molecules * R * Temp) / (GasVolume * atm * Na)
-
-    return PartialPressure
-
-
-def CalculateOxidationRate(N, t, CellDim, PartialPressure,
-                           PPConversion = 0.02, Alpha = 0.05):
-    
-    t = t * 1e-15
-    PureRate = N / t
-    
-    CellSurfaceArea = (2 * np.linalg.norm(np.cross(CellDim['y'], CellDim['z'])) 
-                       * 10 ** -20)
-    
-    OxidationRateConversion = PPConversion / CellSurfaceArea / PartialPressure
-    
-    OxRate = PureRate * OxidationRateConversion
-
-    if N == 0:
-        UpperBound = -np.log(Alpha) / t 
-        UpperBound *= OxidationRateConversion
-        return (OxRate, 0, UpperBound)
-    else:
-        ChiSquaredLowerBound = stats.chi2.ppf((Alpha / 2), (2 * N))
-        ChiSquaredUpperBound = stats.chi2.ppf((1 - (Alpha / 2)), (2 * (N + 1)))
-        LowerBound = ChiSquaredLowerBound / (2 * t)
-        UpperBound = ChiSquaredUpperBound / (2 * t)
-        LowerBound *= OxidationRateConversion
-        UpperBound *= OxidationRateConversion
-        
-        return (OxRate, LowerBound, UpperBound)
-
-
-
-
-'''
-Gasses = an.FindGases(Position, 
-                      CellDim, 
-                      CovalentRadii = CovalentRadii,
-                      AtomicRadiusTol = AtomicRadiusTol, 
-                      MinimumComplexity = 2,
-                      MaximumComplexity = 3,
-                      ReturnBondMatrix = False)
-
-New BondFinder Workflow:
-
-0. Checks to see if all elements in Position are in in CovalentRadii dict
--> if not raise error and specify element which needs to be added
-
-1. Build a Cartesian Distance Matrix Accounting for PBC
-
-2. Run Bond Conditions over cartesian distance:
-Takes bond existence as radius of overlap of CovalentRadii * User defined tolerance
--> the higher the tolerance the safer the algo is before removing a gas molecule
-
-3. Prune O Bonds
-Oxygen can only have 1 Oxygen bond at a time
-(Is this enough?, requires some more testing)
-
-4. Build Networks of Bonded Atoms
-
-5. Filter out Any network MinimumComplexity >= x >= Maximum Complexity
-
-6. Sort All Elements in Molecule for identification steps downsteam
-
-6. Return pd.DataFrame({'Molecule' : Molecules, 'Indices' : Indices})
-if Bondmatrix gets requested give that too. Maybe do some PP on it to make it 
-more useful. 
-'''
 
 
 # --- New gen Code ---
@@ -345,27 +245,6 @@ def FindGases(
 
 
 
-def ConvertDirectToCartesian(Position, CellDim): 
-    '''
-    Converts all x, y, z coordinates in a position dataframe from their fractional
-    coordinates to cartesian coordinates. Useful for distance measurements.
-    
-    Args:
-        Position (pd.DataFrame): Atom positions with 'Element' and fractional 
-            coordinates ('x', 'y', 'z').
-        CellDim (pd.DataFrame): A 3x3 DataFrame defining cell dimensions in angstroms.
-    
-    Returns:
-        Position (pd.DataFrame): Atom positions with 'Element' and cartesian 
-            coordinates ('x', 'y', 'z') in angstrom.
-    '''
-    
-    CellDim = CellDim.to_numpy()
-    FracCoords = Position[['x','y','z']].to_numpy()
-    CartCoords = FracCoords @ CellDim
-    Position[['x','y','z']] = CartCoords
-    
-    return Position
 
 
 def CalculateGasFraction(Position: pd.DataFrame, GasRatio: float, 

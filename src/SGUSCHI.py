@@ -355,8 +355,10 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     for Label, Vsd in PendingDirs:
         # Clear stale terminal markers from a previous attempt so
         # SimulationSummary doesn't report the restarted sim as FAILED/KILLED
-        # before volsearch_cont rewrites them at exit.
-        for Stale in ("job.exit", "job.killed"):
+        # before volsearch_cont rewrites them at exit. (volsearch_cont also
+        # removes sguschi_failed at startup; clearing it here closes the brief
+        # window before that and keeps the restart cleanup consistent.)
+        for Stale in ("job.exit", "job.killed", "sguschi_failed"):
             (Vsd / Stale).unlink(missing_ok=True)
         WriteMarker(Vsd / "job.started", datetime.now().isoformat())
         LogPath = Vsd.parent / "log.out"

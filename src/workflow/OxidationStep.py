@@ -14,6 +14,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
 from workflow import OxidationAnalysis as an
+from utils.FolderUtils import TrajectoryRoot
 
 
 def ExponentialSmoothing(f1: Union[float, int], f2: Union[float, int], 
@@ -99,64 +100,6 @@ def CreateGassesRemovedStr(Gasses) -> str:
     return repr(NonO2)
 
 
-def CheckSimulationEnvironment(WorkDir: Path) -> None:
-    
-    #Function which checks if:
-    #RateAnalysis.csv matches the number of folders in WorkDir.
-        #If not, runs FixRateAnalysis and FixXYZ to repair the folder
-    #Any Folders are missing.
-        #Produces error, reccomends rollback to earlis.
-
-    StepFolders = [
-        int(d.name)
-        for d in WorkDir.iterdir() 
-        if d.is_dir() and d.name.isdigit()]
-    
-    #Check for missing folders
-    if len(StepFolders) != 1:
-        
-        SortedSteps = sorted(set(StepFolders))
-        
-        StepSet = set(SortedSteps)
-       
-        ExpectedRange = range(SortedSteps[0], SortedSteps[-1] + 1)
-        MissingSteps = [Step for Step in ExpectedRange if Step not in StepSet]
-        
-        IsConsecutive = len(MissingSteps) == 0
-        
-        if not IsConsecutive:
-            print(f'Missing Step Folders in {WorkDir}: {MissingSteps}.\nRollBack to {min(MissingSteps) - 1} for complete RateAnalysis and XYZ.')
-        
-    LatestFolder = max(StepFolders)
-    
-    try:
-        RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
-        RateAnalysisSize = len(RateAnalysis)
-    except:
-        RateAnalysisSize = 1
-    
-    # Check if RateAnalysis size matches folder count
-    if RateAnalysisSize != LatestFolder:
-        
-        print('RateAnalysis.csv entries do not match Dir_VolSearch.')
-        
-        #from utils.FixRateAnalysis import FixRateAnalysis
-        #from utils.FixXYZ import FixXYZ
-        #
-        #print('Running FixRateAnalysis...')
-        #FixRateAnalysis(WorkDir)
-        #print('Done.\nRunning FixXYZ...')
-        #FixXYZ(WorkDir)
-        #print('Done.')
-        #
-        #RateAnalysis = vio.ReadRateAnalysis(WorkDir / 'RateAnalysis.csv')
-        #RateAnalysisSize = len(RateAnalysis)
-    #
-        #if RateAnalysisSize != LatestFolder:
-        #    raise ValueError('RateAnalysis.csv entries still do not match Dir_VolSearch after Fix utilities.\nFATAL: RollBack required.')
-    #
- 
-
 def ValidateNoUnknownElements(Position: pd.DataFrame, Context: str) -> None:
     """Fail before bonding logic sees unresolved element labels."""
     if "Element" not in Position.columns:
@@ -216,11 +159,8 @@ def main(WorkDir = None, TestCase = False):
     WorkDir = Path(WorkDir).resolve()
     
     #Location of Radii, Oxparams, Results/, xyz_files/ etc
-    RootDir = WorkDir.parents[1]
-    TrajectoryName = WorkDir.parent.name
+    RootDir, TrajectoryName = TrajectoryRoot(WorkDir)
     
-    #Verify no missing folders, RateAnalysis coherence
-    #CheckSimulationEnvironment(WorkDir)
     
     #------------------------- Gather Hyperparameters -------------------------
         
