@@ -72,6 +72,19 @@ The `example/` directory contains a ready-to-use starting point (with empty POTC
 > reads this key to submit the initial VASP job in each `Dir_VolSearch` — set it to
 > match your cluster scheduler before running.
 
+> **Inspecting / preparing without submitting:** `SGUSCHI.py` accepts two flags useful
+> on a login node:
+> - `--dry-run` — print the new/pending/done classification and what *would* be done,
+>   without creating folders or submitting anything.
+> - `--prepare-only` — create the simulation folder trees (templated `INCAR`/`job.in`,
+>   per-folder `POSCAR`, `Dir_VolSearch`/`Dir_OptUnitCell`, etc.) but do **not** submit
+>   VASP jobs or launch `volsearch_cont`. Safe to run on a login node; idempotent
+>   (existing folders are skipped).
+>
+> ```bash
+> python src/SGUSCHI.py [WorkDir] --prepare-only
+> ```
+
 ## Configuration Reference
 
 ### OxParams

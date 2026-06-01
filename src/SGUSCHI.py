@@ -5,7 +5,7 @@ Called by OxidationMaster (the user-customised Slurm submission script) on the
 compute node. Handles everything from folder creation to running volsearch_cont.
 
 Usage (called by OxidationMaster):
-    python /path/to/SGUSCHI/src/SGUSCHI.py [WorkDir] [--dry-run]
+    python /path/to/SGUSCHI/src/SGUSCHI.py [WorkDir] [--dry-run] [--prepare-only]
 
 WorkDir defaults to the current working directory (the simulation workspace).
 
@@ -56,6 +56,12 @@ def ParseArgs() -> argparse.Namespace:
         "--dry-run",
         action="store_true",
         help="Print what would be done without creating folders or launching jobs",
+    )
+    Parser.add_argument(
+        "--prepare-only",
+        action="store_true",
+        help="Create simulation folders only; do not submit VASP jobs or launch "
+             "volsearch_cont (safe to run on a login node)",
     )
     return Parser.parse_args()
 
@@ -464,6 +470,15 @@ def main() -> int:
 
     # Setup new folders
     FailedLabels: Set[str] = set()
+    if Args.prepare_only:
+        if NewLabels:
+            RunSetup(WorkDir, Params, NewLabels)
+            print("Prepared {} new simulation folder(s).".format(len(NewLabels)))
+        else:
+            print("No new simulation folders to prepare.")
+        print("--prepare-only: skipping VASP job submission and volsearch_cont launch.")
+        return 0
+
     if NewLabels:
         RunSetup(WorkDir, Params, NewLabels)
         FailedLabels = SubmitInitialVaspJobs(WorkDir, Params, NewLabels)
