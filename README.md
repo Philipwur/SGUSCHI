@@ -29,11 +29,30 @@ chmod +x *
 
 # Install Python dependencies
 pip install numpy pandas scipy
+
+# Optional: development tools (tests, formatting, linting)
+pip install pytest black ruff
 ```
+
+## Testing
+
+The test suite lives in `src/test/` and must be run from that directory (`conftest.py`
+adds `src/` to `sys.path`):
+
+```bash
+cd src/test
+pytest                                  # full suite
+pytest TestGasWorkflow.py               # a single module
+pytest TestVaspioIo.py::TestName        # a single class
+python RunTests.py                      # alternative runner
+```
+
+`TestPressureAvg.py` compiles the Fortran orchestrator and is auto-skipped if no
+`ifort`/`ifx`/`gfortran` is on `PATH`.
 
 ## Quick Start
 
-The `example/` directory contains a ready-to-use starting point (with empty POTCAR). See `example/note.md` for a full walkthrough. The steps are:
+The `example/` directory contains a ready-to-use starting point (with empty POTCAR). See `example/note.md` for the quick-start steps and per-file customisation notes. The steps are:
 
 1. Copy the `example/` folder to your workspace and populate it:
    `POSCAR` (supercell, no O atoms, no gas region), `POTCAR`, `INCAR`, `KPOINTS`,
@@ -57,18 +76,20 @@ The `example/` directory contains a ready-to-use starting point (with empty POTC
 
 ### OxParams
 
+All keys are **required** except `MaxRuntime`.
+
 | Key | Description |
 |-----|-------------|
+| `Temperatures` | List of simulation temperatures in K |
+| `NSims` | Number of parallel simulation replicas per temperature |
+| `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
+| `InitO2Count` | Number of O₂ molecules placed at initialisation |
 | `AtomicRadiusTol` | Multiplier applied to the sum of covalent radii for bond detection |
 | `O2Tol` | Target O₂ count per unit void fraction |
 | `OSmoothing` | Exponential smoothing factor α for O₂ count (default 0.001; heavily history-weighted) |
 | `MaxRuntime` | *(optional)* Stop simulation after this many ps of simulated time. If unset, runs until convergence. |
-| `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
-| `InitO2Count` | Number of O₂ molecules placed at initialisation |
-| `Temperatures` | List of simulation temperatures in K |
-| `NSims` | Number of parallel simulation replicas per temperature |
 
-> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, raise `MaxRuntime` in `OxParams`, then manually delete `volsearch_is_done`, `maxruntime_reached`, and `sguschi_failed` from `Dir_VolSearch` and resubmit `OxidationMaster`.
+> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, raise `MaxRuntime` in `OxParams`, then delete `volsearch_is_done` and `maxruntime_reached` from `Dir_VolSearch` and resubmit `OxidationMaster`. (`SGUSCHI.py` clears `job.exit`/`job.killed`/`sguschi_failed` automatically — no need to remove those.)
 
 ### CovalentRadii
 
@@ -116,6 +137,26 @@ volsearch_cont (csh)
 ```
 
 If `OxidationStep.py` exits with a non-zero status, `volsearch_cont` halts immediately and writes a `sguschi_failed` marker file.
+
+### Job state markers
+
+Each `Dir_VolSearch` carries marker files that record job state and drive recovery on
+resubmission. `SGUSCHI.py` writes the `job.*` markers; the rest are written by the run
+itself.
+
+| Marker | Written by | Meaning |
+|--------|-----------|---------|
+| `job.started` | `SGUSCHI.py` | ISO timestamp when `volsearch_cont` was launched |
+| `job.exit` | `SGUSCHI.py` | `volsearch_cont` exit code (`0` = done; `-1` = initial VASP submission failed) |
+| `job.killed` | `SGUSCHI.py` | walltime/SIGTERM kill message |
+| `volsearch_is_done` | `OxidationStep.py` | simulation reached its stopping condition |
+| `maxruntime_reached` | `OxidationStep.py` | `MaxRuntime` (ps) cap was hit |
+| `sguschi_failed` | `volsearch_cont` | `OxidationStep.py` raised an exception; run halted |
+
+On every resubmission `SGUSCHI.py` automatically clears stale `job.exit`, `job.killed`,
+and `sguschi_failed` markers, so a retried simulation is not misreported — you do **not**
+need to delete the `job.*` markers by hand. To extend a `MaxRuntime`-capped run, see the
+resuming note under [OxParams](#oxparams).
 
 ## Known Limitations
 

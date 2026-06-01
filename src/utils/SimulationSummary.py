@@ -40,13 +40,14 @@ class SimulationRow:
 
     Simulation: str
     Status: str
+    LastUpdate: str
     Folders: str
-    Latest: str
     RateRows: str
     SimTime_ps: str
     TotalO2Added: str
     MoleculesRemoved: str
     WallTime: str
+    QueueTime: str
     Done: str
     Failed: str
     Detail: str
@@ -57,13 +58,14 @@ class SimulationRow:
 SUMMARY_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("Simulation",       "Simulation"),
     ("Status",           "Status"),
+    ("LastUpdate",       "Age"),
     ("Folders",          "Folders"),
-    ("Latest",           "Latest"),
     ("RateRows",         "RateRows"),
     ("SimTime_ps",       "Time_ps"),
     ("TotalO2Added",     "O2Added"),
     ("MoleculesRemoved", "GasRemoved"),
     ("WallTime",         "Wall"),
+    ("QueueTime",        "Queue"),
     ("Done",             "Done"),
     ("Failed",           "Failed"),
     ("Detail",           "Detail"),
@@ -326,6 +328,115 @@ def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
     return FormatDuration(max(Times) - min(Times))
 
 
+def LastUpdateAge(WorkDir: Path) -> str:
+    """Time since the most recent simulation activity (best-effort, mtime-based).
+
+    Reuses LatestActivityTime (the same progress-file set that drives the
+    'recent activity' RUNNING status) so the Age column stays consistent with
+    status detection. Returns '-' when nothing is readable. Shares the OneDrive
+    mtime caveat noted on EstimateWallTime.
+    """
+    Recent = LatestActivityTime(WorkDir)
+    if Recent is None:
+        return "-"
+    return FormatDuration(time.time() - Recent)
+
+
+# VASP writes its run start time in the OUTCAR header, e.g.:
+#   executed on             LinuxIFC date 2024.03.11  09:21:43
+_OUTCAR_DATE_RE = re.compile(
+    r"executed on.*?date\s+(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})"
+)
+
+
+def ReadOutcarStartTime(OutcarPath: Path) -> Optional[datetime.datetime]:
+    """Parse VASP's 'executed on ... date ...' header line as a naive datetime.
+
+    Returns None if the file is missing/unreadable or the line is absent (some
+    MLFF/older builds omit it) — the caller then treats that step as having no
+    measurable queue time rather than failing.
+    """
+    try:
+        with OutcarPath.open("r", encoding="utf-8", errors="ignore") as File:
+            for _ in range(60):
+                Line = File.readline()
+                if not Line:
+                    break
+                Match = _OUTCAR_DATE_RE.search(Line)
+                if Match:
+                    try:
+                        return datetime.datetime(*(int(Group) for Group in Match.groups()))
+                    except ValueError:
+                        return None
+    except OSError:
+        return None
+    return None
+
+
+def ReadSubmitTimes(WorkDir: Path) -> Dict[int, List[datetime.datetime]]:
+    """Parse .submit_times ('<step> <YYYY.MM.DD HH:MM:SS>' per line).
+
+    Written best-effort by volsearch_cont at each submission. Malformed or partial
+    lines (e.g. a failed `date` leaving only the step number) are skipped, so a
+    corrupt file degrades to fewer pairings rather than an error.
+    """
+    Result: Dict[int, List[datetime.datetime]] = {}
+    try:
+        Text = (WorkDir / ".submit_times").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return Result
+    for Line in Text.splitlines():
+        Parts = Line.split()
+        if len(Parts) < 2:
+            continue
+        try:
+            Step = int(Parts[0])
+            Stamp = datetime.datetime.strptime(" ".join(Parts[1:]), "%Y.%m.%d %H:%M:%S")
+        except ValueError:
+            continue
+        Result.setdefault(Step, []).append(Stamp)
+    return Result
+
+
+def ComputeQueueTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
+    """Cumulative queue (wait) time across all steps that have both timestamps.
+
+    Per step: VASP start (from the archived OUTCAR header) minus the latest
+    submission recorded at or before that start, so a resubmitted step pairs with
+    the submission that actually launched it. Steps missing either timestamp, or
+    with a non-positive delta (clock skew), contribute zero. Returns '-' only when
+    no step yields a usable submit/start pair — distinct from a genuine '0s'.
+    """
+    SubmitTimes = ReadSubmitTimes(WorkDir)
+    if not SubmitTimes:
+        return "-"
+
+    # Archived steps live in <step>/OUTCAR; the in-flight step's OUTCAR is top-level.
+    Candidates: List[Tuple[int, Path]] = [
+        (Step, WorkDir / str(Step) / "OUTCAR") for Step in StepFolders
+    ]
+    InFlight = (max(StepFolders) + 1) if StepFolders else 1
+    Candidates.append((InFlight, WorkDir / "OUTCAR"))
+
+    TotalSeconds = 0.0
+    Found = False
+    for Step, OutcarPath in Candidates:
+        Submits = SubmitTimes.get(Step)
+        if not Submits:
+            continue
+        Start = ReadOutcarStartTime(OutcarPath)
+        if Start is None:
+            continue
+        Eligible = [Stamp for Stamp in Submits if Stamp <= Start]
+        if not Eligible:
+            continue
+        Found = True
+        Delta = (Start - max(Eligible)).total_seconds()
+        if Delta > 0:
+            TotalSeconds += Delta
+    return FormatDuration(TotalSeconds) if Found else "-"
+
+
 def FormatDuration(Seconds: float) -> str:
     """Format seconds as compact d/h/m/s text."""
     if Seconds < 0:
@@ -451,13 +562,14 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
     return SimulationRow(
         Simulation=Label,
         Status=Status,
+        LastUpdate=LastUpdateAge(WorkDir),
         Folders=str(len(StepFolders)) if WorkDir.exists() else "-",
-        Latest=str(StepFolders[-1]) if StepFolders else "-",
         RateRows=RateRows,
         SimTime_ps=SimTime,
         TotalO2Added=TotalO2Added,
         MoleculesRemoved=MoleculesRemoved,
         WallTime=EstimateWallTime(WorkDir, StepFolders),
+        QueueTime=ComputeQueueTime(WorkDir, StepFolders),
         Done=Done,
         Failed=Failed,
         Detail=Detail,

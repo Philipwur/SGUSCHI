@@ -18,6 +18,7 @@
 ## Postprocessing
 
 - Add Pressure method to postprocessing from DevArea.
+- Review and finish `src/postprocessing/workflow/` scripts (CalculatePartialPressure.py, CompareMethodsCumulative.py); currently work-in-progress and undocumented. Once stable, document the postprocessing workflow in README (inputs from RateAnalysis.csv, how/when to run, expected outputs) and add the `plotly`/`tqdm` usage there.
 
 ## OxidationStep
 
@@ -55,6 +56,7 @@
 
 ## OxidationPreProcessing
 
+- Save `Original_POSCAR` (the base structure) before expanding the cell with the gas region and populating it with O2, so the pristine starting structure is preserved.
 - Add supercell generation.
 - Add SQS (read paper first).
 - Add thermal expansion section.

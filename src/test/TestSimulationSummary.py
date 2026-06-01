@@ -75,6 +75,29 @@ def Touch(PathFile: Path, Timestamp: int) -> None:
     os.utime(PathFile, (Timestamp, Timestamp))
 
 
+def WriteOutcar(WorkDir: Path, Step: int, StartStamp: str) -> None:
+    """Write a minimal OUTCAR carrying VASP's 'executed on ... date ...' header.
+
+    Step 0 writes the in-flight top-level OUTCAR; any other step writes the
+    archived <step>/OUTCAR. StartStamp is 'YYYY.MM.DD  HH:MM:SS'.
+    """
+    if Step == 0:
+        OutcarPath = WorkDir / "OUTCAR"
+    else:
+        StepDir = WorkDir / str(Step)
+        StepDir.mkdir(exist_ok=True)
+        OutcarPath = StepDir / "OUTCAR"
+    OutcarPath.write_text(
+        f" vasp.6.3.0\n executed on             LinuxIFC date {StartStamp}\n",
+        encoding="utf-8",
+    )
+
+
+def WriteSubmitTimes(WorkDir: Path, Lines: list[str]) -> None:
+    """Write the .submit_times file recorded by volsearch_cont at submission."""
+    (WorkDir / ".submit_times").write_text("\n".join(Lines) + "\n", encoding="utf-8")
+
+
 def TestDoneSimulationIsDetected(RootDir: Path) -> None:
     """volsearch_is_done should produce DONE status."""
     WorkDir = MakeWorkDir(RootDir, "873_1")
@@ -90,7 +113,6 @@ def TestDoneSimulationIsDetected(RootDir: Path) -> None:
     assert Row.Status == "DONE"
     assert Row.Done == "Y"
     assert Row.Folders == "1"
-    assert Row.Latest == "1"
     assert Row.WallTime != "-"
 
 
@@ -301,6 +323,11 @@ def TestSummaryOutputsUseCurrentSchema(RootDir: Path) -> None:
     Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
     assert "O2Added" in Text
     assert "GasRemoved" in Tsv
+    # New columns present, retired "Latest" column gone.
+    for Document in (Text, Tsv):
+        assert "Queue" in Document
+        assert "Age" in Document
+        assert "Latest" not in Document
 
 
 def TestCliParsingAcceptsWatchOptions() -> None:
@@ -390,3 +417,129 @@ def TestExistingSummaryDocumentHeadersAreMigrated(RootDir: Path) -> None:
         assert "O2Added" in Document and "TotalO2Added" not in Document
         assert "GasRemoved" in Document and "MoleculesRemoved" not in Document
         assert "Time_ps" in Document and "SimTime_ps" not in Document
+
+
+# --------------------------- Queue time ---------------------------------------
+
+
+def TestQueueTimeIsComputedFromSubmitAndOutcarStart(RootDir: Path) -> None:
+    """Queue time = OUTCAR start minus the recorded submission time."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  09:21:45")
+    WriteSubmitTimes(WorkDir, ["1 2024.03.11 09:21:00"])  # 45 s earlier
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "45s"
+
+
+def TestQueueTimeForInFlightTopLevelOutcar(RootDir: Path) -> None:
+    """The currently-running step's OUTCAR (top-level) is also counted."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 0, "2024.03.11  09:00:30")  # in-flight = step 1
+    WriteSubmitTimes(WorkDir, ["1 2024.03.11 09:00:00"])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "30s"
+
+
+def TestQueueTimeIsCumulativeAcrossSteps(RootDir: Path) -> None:
+    """Per-step queue times sum into the reported total."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  09:00:30")  # 30 s
+    WriteOutcar(WorkDir, 2, "2024.03.11  10:00:45")  # 45 s
+    WriteSubmitTimes(WorkDir, ["1 2024.03.11 09:00:00", "2 2024.03.11 10:00:00"])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "1m15s"  # 75 s
+
+
+def TestQueueTimeResubmissionPicksLatestSubmitBeforeStart(RootDir: Path) -> None:
+    """A restarted/resubmitted step pairs with the submission that launched it."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  10:00:30")
+    WriteSubmitTimes(WorkDir, [
+        "1 2024.03.11 08:00:00",   # abandoned first submission
+        "1 2024.03.11 10:00:00",   # resubmission that actually ran -> 30 s
+    ])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "30s"
+
+
+def TestQueueTimeIsZeroWhenStartEqualsSubmit(RootDir: Path) -> None:
+    """A measured-but-zero wait reports '0s', distinct from '-' (no data)."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  09:00:00")
+    WriteSubmitTimes(WorkDir, ["1 2024.03.11 09:00:00"])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "0s"
+
+
+def TestQueueTimeToleratesMalformedSubmitLines(RootDir: Path) -> None:
+    """A corrupt .submit_times degrades to fewer pairings, never an error."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  09:21:45")
+    WriteSubmitTimes(WorkDir, [
+        "garbage line with no timestamp",
+        "1",                       # step only (failed `date`) -> skipped
+        "x 2024.03.11 09:21:00",   # non-integer step -> skipped
+        "1 not-a-date",            # unparseable timestamp -> skipped
+        "1 2024.03.11 09:21:00",   # valid -> 45 s
+    ])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "45s"
+
+
+def TestQueueTimeIsDashWithoutSubmitTimes(RootDir: Path) -> None:
+    """No .submit_times (e.g. orchestrator not yet redeployed) -> '-'."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    WriteOutcar(WorkDir, 1, "2024.03.11  09:21:45")
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "-"
+
+
+def TestQueueTimeIsDashWhenOutcarLacksStartLine(RootDir: Path) -> None:
+    """An OUTCAR without the 'executed on ... date' line (e.g. some MLFF builds) -> '-'."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    Step = WorkDir / "1"
+    Step.mkdir()
+    (Step / "OUTCAR").write_text(" vasp.6.3.0\n no date header here\n", encoding="utf-8")
+    WriteSubmitTimes(WorkDir, ["1 2024.03.11 09:21:00"])
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.QueueTime == "-"
+
+
+# --------------------------- Last-update age ----------------------------------
+
+
+def TestLastUpdateAgeReflectsRecentActivity(RootDir: Path) -> None:
+    """A freshly written activity file yields a non-dash age."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "RateAnalysis.csv").write_text(
+        "Time (fs),O2 Count\n0,10\n", encoding="utf-8"
+    )
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.LastUpdate != "-"
+
+
+def TestLastUpdateAgeIsDashWhenNoActivity(RootDir: Path) -> None:
+    """An empty workdir has no activity timestamps -> '-'."""
+    MakeWorkDir(RootDir, "873_1")
+
+    Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
+
+    assert Row.LastUpdate == "-"

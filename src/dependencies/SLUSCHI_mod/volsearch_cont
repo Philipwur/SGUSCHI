@@ -137,6 +137,9 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
     endif
     echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
     echo $nstep > $submission_marker
+    # Record submission time for queue-time reporting (best-effort; must never affect control flow).
+    set _submit_ts = `date '+%Y.%m.%d %H:%M:%S'`
+    echo "$nstep $_submit_ts" >> .submit_times
     rm -f $submission_log
     ( $vaspcmd jobsub ) >>& $submission_log
     set submit_status = $?
@@ -630,6 +633,9 @@ while ($stopflag == 0)
       set nextstep = `expr $nstep + 1`
       echo $nextstep > poscar_built_for_step
       echo $nextstep > $submission_marker
+      # Record submission time for queue-time reporting (best-effort; must never affect control flow).
+      set _submit_ts = `date '+%Y.%m.%d %H:%M:%S'`
+      echo "$nextstep $_submit_ts" >> .submit_times
       rm -f $submission_log
       ( $vaspcmd jobsub ) >>& $submission_log
       set submit_status = $?
