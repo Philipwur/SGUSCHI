@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,6 +23,17 @@ def EnsureSrcOnPath() -> None:
 EnsureSrcOnPath()
 
 from utils import SimulationSummary as Summary  # noqa: E402
+from utils import StatusLog  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def NoScheduler(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default every test to 'scheduler unknown' so no real squeue/qstat runs.
+
+    Stuck tests inject an explicit LiveIds set via BuildSummary(..., LiveIds=...),
+    which bypasses LiveJobIds entirely.
+    """
+    monkeypatch.setattr(Summary, "LiveJobIds", lambda: None)
 
 
 @pytest.fixture(name="RootDir")
@@ -93,9 +105,40 @@ def WriteOutcar(WorkDir: Path, Step: int, StartStamp: str) -> None:
     )
 
 
+def SeedSimLog(WorkDir: Path, Rows: list[tuple]) -> None:
+    """Write sim_log.tsv directly. Rows are (datetime|None, source, event, detail).
+
+    None timestamp → now. Lets tests control submit times (for grace/queue logic).
+    """
+    Lines = []
+    for Stamp, Source, Event, Detail in Rows:
+        if Stamp is None:
+            Stamp = datetime.now()
+        Lines.append("\t".join((Stamp.isoformat(timespec="seconds"), Source, Event, Detail)))
+    (WorkDir / StatusLog.SIM_LOG).write_text("\n".join(Lines) + "\n", encoding="utf-8")
+
+
 def WriteSubmitTimes(WorkDir: Path, Lines: list[str]) -> None:
-    """Write the .submit_times file recorded by volsearch_cont at submission."""
-    (WorkDir / ".submit_times").write_text("\n".join(Lines) + "\n", encoding="utf-8")
+    """Seed sim_log.tsv 'submitted' events from '<step> <YYYY.MM.DD HH:MM:SS>' lines.
+
+    Mirrors what volsearch_cont logs (the event timestamp is the submit time). A
+    dummy job id is appended. Malformed inputs are written verbatim so the log
+    reader skips them exactly as it would a corrupt line.
+    """
+    Out: list[str] = []
+    for Line in Lines:
+        Parts = Line.split()
+        if len(Parts) < 2:
+            Out.append(Line)  # junk -> < 3 TSV fields -> skipped by ReadEvents
+            continue
+        Step, Stamp = Parts[0], " ".join(Parts[1:])
+        try:
+            Iso = datetime.strptime(Stamp, "%Y.%m.%d %H:%M:%S").isoformat(timespec="seconds")
+        except ValueError:
+            Out.append(Line)  # unparseable timestamp -> skipped by ReadEvents
+            continue
+        Out.append("\t".join((Iso, "volsearch_cont", "submitted", "{} 100".format(Step))))
+    (WorkDir / StatusLog.SIM_LOG).write_text("\n".join(Out) + "\n", encoding="utf-8")
 
 
 def TestDoneSimulationIsDetected(RootDir: Path) -> None:
@@ -155,12 +198,12 @@ def TestRestartedRunIgnoresPreviousRunFatalLog(RootDir: Path) -> None:
     log.out is appended to (not truncated) across restarts, so a previous run's
     FATAL line lingers in the log. Failure is determined solely by the
     self-clearing sguschi_failed marker (cleared on restart), not by scanning the
-    log for FATAL text, so a running sim with job.started present stays RUNNING.
+    log for FATAL text, so a running sim with a 'started' event stays RUNNING.
     """
     WorkDir = MakeWorkDir(RootDir, "1073_2")
     (WorkDir / "1").mkdir()
     (WorkDir / "OUTCAR").write_text("running\n", encoding="utf-8")
-    (WorkDir / "job.started").write_text("2026-05-30T12:00:00", encoding="utf-8")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", "")])
 
     # Stale FATAL from the previous, failed run still sitting in the log.
     (WorkDir.parent / "log.out").write_text(
@@ -543,3 +586,123 @@ def TestLastUpdateAgeIsDashWhenNoActivity(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir), "873_1")
 
     assert Row.LastUpdate == "-"
+
+
+# --------------------------- Log lifecycle status -----------------------------
+
+
+def TestKilledEventProducesKilled(RootDir: Path) -> None:
+    """A 'killed' log event (SIGTERM) yields KILLED."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", ""),
+                         (None, "SGUSCHI", "killed", "SIGTERM")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "KILLED"
+    assert Row.Failed == "Y"
+
+
+def TestExitZeroEventProducesDone(RootDir: Path) -> None:
+    """An 'exit 0' log event yields DONE even without volsearch_is_done."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", ""),
+                         (None, "SGUSCHI", "exit", "0")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "DONE"
+    assert Row.Done == "Y"
+
+
+def TestExitNonzeroEventProducesFailed(RootDir: Path) -> None:
+    """A non-zero 'exit' log event (e.g. launch failure -1) yields FAILED."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "exit", "-1")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "FAILED"
+    assert Row.Failed == "Y"
+
+
+def TestRestartStartedSupersedesEarlierExit(RootDir: Path) -> None:
+    """A 'started' event after an earlier 'exit' (restart) is RUNNING, not FAILED."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    Old = datetime.now() - timedelta(hours=1)
+    SeedSimLog(WorkDir, [(Old, "SGUSCHI", "exit", "1"),
+                         (None, "SGUSCHI", "started", "")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "RUNNING"
+    assert Row.Failed == "N"
+
+
+# --------------------------- Scheduler-aware stuck ----------------------------
+
+
+def _SeedInFlightStep(WorkDir: Path, JobId: str, SubmitAgo: timedelta,
+                      OutcarBody: str = "") -> None:
+    """Set up a started sim mid-step-2: a step-1 folder, an in-flight OUTCAR, the
+    .vasp_submitted_step sentinel, and started+submitted log events."""
+    (WorkDir / "1").mkdir()
+    (WorkDir / "OUTCAR").write_text(OutcarBody, encoding="utf-8")
+    (WorkDir / ".vasp_submitted_step").write_text("2", encoding="utf-8")
+    Stamp = datetime.now() - SubmitAgo
+    SeedSimLog(WorkDir, [(Stamp, "SGUSCHI", "started", ""),
+                         (Stamp, "volsearch_cont", "submitted", "2 {}".format(JobId))])
+
+
+def TestStuckWhenJobAbsentFromScheduler(RootDir: Path) -> None:
+    """Empty in-flight OUTCAR + job gone from the queue + past grace -> STUCK."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=10))
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
+
+    assert Row.Status == "STUCK"
+    assert Row.Detail == "Check .out file and resubmit"
+    assert Row.Failed == "N"
+
+
+def TestRunningWhenJobPresentInScheduler(RootDir: Path) -> None:
+    """Same state but the job is still in the queue -> RUNNING (queued)."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=10))
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"555"}), "1273_2")
+
+    assert Row.Status == "RUNNING"
+    assert Row.Detail == "queued"
+
+
+def TestNotStuckWhenSchedulerUnknown(RootDir: Path) -> None:
+    """Liveness unknown (off-cluster / query failed) never flags STUCK."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=10))
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "1273_2")
+
+    assert Row.Status == "RUNNING"
+
+
+def TestNotStuckWithinSubmitGrace(RootDir: Path) -> None:
+    """A just-submitted job absent from the queue is within grace -> not STUCK."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(seconds=5))
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
+
+    assert Row.Status == "RUNNING"
+
+
+def TestNotStuckWhenOutcarCompleted(RootDir: Path) -> None:
+    """If OUTCAR already hit 'Total CPU', the step completed -> not STUCK."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=10),
+                      OutcarBody=" Total CPU time used (sec):    1.0\n")
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
+
+    assert Row.Status != "STUCK"

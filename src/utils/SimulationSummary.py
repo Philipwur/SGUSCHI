@@ -10,14 +10,16 @@ import argparse
 import ast
 import csv
 import datetime
+import getpass
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 # Make the project's src/ importable when this scanner runs as a standalone
 # script (sys.path[0] is then src/utils); a no-op when imported as a package.
@@ -26,6 +28,16 @@ if _SrcDir not in sys.path:
     sys.path.append(_SrcDir)
 
 from utils.FolderUtils import NumericStepFolders
+from utils import StatusLog
+
+# Stuck detection: a step whose scheduler job is gone while its OUTCAR has not
+# yet completed is dead. A short grace absorbs the submit->appears-in-queue and
+# completed->processed races before the verdict is trusted.
+SUBMIT_GRACE_SECONDS = 120
+
+# Sentinel so callers can pass LiveIds=None ("scheduler unknown") explicitly,
+# distinct from the default "auto-detect and query the scheduler once".
+_AUTO_LIVE_IDS = object()
 
 
 SUMMARY_TXT = Path("SimulationSummary")
@@ -264,32 +276,121 @@ def FormatPicoseconds(Value: str) -> str:
     return f"{Number:.6f}".rstrip("0").rstrip(".")
 
 
-def ReadJobMarkers(WorkDir: Path) -> Tuple[Optional[float], Optional[int], bool]:
-    """Read job.started / job.exit / job.killed written by SGUSCHI.py.
+def LiveJobIds() -> Optional[Set[str]]:
+    """Return the set of the current user's live scheduler job IDs, or None.
 
-    Returns (started_mtime_or_None, exit_code_or_None, was_killed).
+    Cluster-agnostic and zero-config: auto-detects the scheduler client on PATH
+    (Slurm `squeue`, else PBS `qstat`). Returns None ("liveness unknown") when no
+    client is found or the query errors/times out — a plain sentinel that NEVER
+    raises, calls sys.exit, or sets a non-zero process exit code, so the summary
+    keeps running. Called once per refresh and reused for every simulation.
     """
-    StartedPath = WorkDir / "job.started"
-    ExitPath    = WorkDir / "job.exit"
-    KilledPath  = WorkDir / "job.killed"
+    try:
+        User = getpass.getuser()
+    except Exception:
+        User = os.environ.get("USER") or os.environ.get("USERNAME") or ""
 
-    StartedMtime: Optional[float] = None
-    if StartedPath.exists():
+    if shutil.which("squeue"):
+        return _RunJobIdQuery(["squeue", "-h", "-u", User, "-o", "%i"], _ParseSlurmIds)
+    if shutil.which("qstat"):
+        return _RunJobIdQuery(["qstat", "-u", User], _ParsePbsIds)
+    return None
+
+
+def _RunJobIdQuery(Command: Sequence[str], Parser) -> Optional[Set[str]]:
+    """Run a scheduler query and parse live job IDs; any failure → None."""
+    try:
+        Result = subprocess.run(
+            list(Command), capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if Result.returncode != 0:
+        return None
+    try:
+        return Parser(Result.stdout)
+    except Exception:
+        return None
+
+
+def _ParseSlurmIds(Text: str) -> Set[str]:
+    """Parse `squeue -h -o %i` output into a set of base numeric job IDs."""
+    Ids: Set[str] = set()
+    for Line in Text.splitlines():
+        Token = Line.strip()
+        if not Token:
+            continue
+        Base = Token.split("_", 1)[0].split(".", 1)[0]  # drop array/step suffix
+        if Base.isdigit():
+            Ids.add(Base)
+            Ids.add(Token)
+    return Ids
+
+
+def _ParsePbsIds(Text: str) -> Set[str]:
+    """Parse `qstat -u` output into a set of base numeric job IDs."""
+    Ids: Set[str] = set()
+    for Line in Text.splitlines():
+        Fields = Line.split()
+        if not Fields:
+            continue
+        First = Fields[0]
+        Base = First.split(".", 1)[0]
+        if Base.isdigit():
+            Ids.add(Base)
+            Ids.add(First)
+    return Ids
+
+
+def OutcarHasCompleted(OutcarPath: Path) -> bool:
+    """True if the (top-level, in-flight) OUTCAR carries VASP's 'Total CPU' line.
+
+    Tail-reads only the last ~8 KB (the timing line is at the end) so this stays
+    cheap when called per-sim every refresh. Empty/missing OUTCAR → not completed.
+    """
+    try:
+        Size = OutcarPath.stat().st_size
+    except OSError:
+        return False
+    if Size == 0:
+        return False
+    try:
+        with OutcarPath.open("rb") as FileObj:
+            if Size > 8192:
+                FileObj.seek(-8192, os.SEEK_END)
+            Tail = FileObj.read()
+    except OSError:
+        return False
+    return b"Total CPU" in Tail
+
+
+def ParseSubmitEvents(Events: Sequence["StatusLog.LogEvent"]) -> Dict[int, List[Tuple[datetime.datetime, Optional[str]]]]:
+    """Map step → [(submit_time, job_id_or_None)] from 'submitted' log events.
+
+    Detail is '<step> <jobid>'. Malformed entries are skipped.
+    """
+    Result: Dict[int, List[Tuple[datetime.datetime, Optional[str]]]] = {}
+    for Event in Events:
+        if Event.Event != "submitted":
+            continue
+        Tokens = Event.Detail.split()
+        if not Tokens:
+            continue
         try:
-            StartedMtime = StartedPath.stat().st_mtime
-        except OSError:
-            pass
+            Step = int(Tokens[0])
+        except ValueError:
+            continue
+        JobId = Tokens[1] if len(Tokens) > 1 else None
+        Result.setdefault(Step, []).append((Event.Timestamp, JobId))
+    return Result
 
-    WasKilled = KilledPath.exists()
 
-    ExitCode: Optional[int] = None
-    if ExitPath.exists():
-        try:
-            ExitCode = int(ExitPath.read_text(encoding="utf-8").strip())
-        except (ValueError, OSError):
-            ExitCode = -1
-
-    return StartedMtime, ExitCode, WasKilled
+def ParseExitCode(Detail: str) -> int:
+    """Parse the rc from an 'exit' event detail; unparseable → non-zero (1)."""
+    try:
+        return int((Detail or "").split()[0])
+    except (ValueError, IndexError):
+        return 1
 
 
 def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
@@ -314,7 +415,7 @@ def EstimateWallTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
         AddStat(WorkDir / str(Step))
 
     for Name in ("volsearch_is_done", "sguschi_failed", "RateAnalysis.csv", "jobsub.log",
-                 "job.started", "job.exit", "job.killed", "maxruntime_reached"):
+                 "job.exit", "maxruntime_reached", StatusLog.SIM_LOG):
         PathFile = WorkDir / Name
         if PathFile.exists():
             AddStat(PathFile)
@@ -373,42 +474,21 @@ def ReadOutcarStartTime(OutcarPath: Path) -> Optional[datetime.datetime]:
     return None
 
 
-def ReadSubmitTimes(WorkDir: Path) -> Dict[int, List[datetime.datetime]]:
-    """Parse .submit_times ('<step> <YYYY.MM.DD HH:MM:SS>' per line).
-
-    Written best-effort by volsearch_cont at each submission. Malformed or partial
-    lines (e.g. a failed `date` leaving only the step number) are skipped, so a
-    corrupt file degrades to fewer pairings rather than an error.
-    """
-    Result: Dict[int, List[datetime.datetime]] = {}
-    try:
-        Text = (WorkDir / ".submit_times").read_text(encoding="utf-8", errors="ignore")
-    except OSError:
-        return Result
-    for Line in Text.splitlines():
-        Parts = Line.split()
-        if len(Parts) < 2:
-            continue
-        try:
-            Step = int(Parts[0])
-            Stamp = datetime.datetime.strptime(" ".join(Parts[1:]), "%Y.%m.%d %H:%M:%S")
-        except ValueError:
-            continue
-        Result.setdefault(Step, []).append(Stamp)
-    return Result
-
-
-def ComputeQueueTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
+def ComputeQueueTime(
+    WorkDir: Path,
+    StepFolders: Sequence[int],
+    Events: Sequence["StatusLog.LogEvent"],
+) -> str:
     """Cumulative queue (wait) time across all steps that have both timestamps.
 
     Per step: VASP start (from the archived OUTCAR header) minus the latest
-    submission recorded at or before that start, so a resubmitted step pairs with
-    the submission that actually launched it. Steps missing either timestamp, or
-    with a non-positive delta (clock skew), contribute zero. Returns '-' only when
-    no step yields a usable submit/start pair — distinct from a genuine '0s'.
+    `submitted` log event recorded at or before that start, so a resubmitted step
+    pairs with the submission that actually launched it. Steps missing either
+    timestamp, or with a non-positive delta (clock skew), contribute zero. Returns
+    '-' only when no step yields a usable submit/start pair — distinct from '0s'.
     """
-    SubmitTimes = ReadSubmitTimes(WorkDir)
-    if not SubmitTimes:
+    SubmitEvents = ParseSubmitEvents(Events)
+    if not SubmitEvents:
         return "-"
 
     # Archived steps live in <step>/OUTCAR; the in-flight step's OUTCAR is top-level.
@@ -421,13 +501,13 @@ def ComputeQueueTime(WorkDir: Path, StepFolders: Sequence[int]) -> str:
     TotalSeconds = 0.0
     Found = False
     for Step, OutcarPath in Candidates:
-        Submits = SubmitTimes.get(Step)
+        Submits = SubmitEvents.get(Step)
         if not Submits:
             continue
         Start = ReadOutcarStartTime(OutcarPath)
         if Start is None:
             continue
-        Eligible = [Stamp for Stamp in Submits if Stamp <= Start]
+        Eligible = [Stamp for Stamp, _ in Submits if Stamp <= Start]
         if not Eligible:
             continue
         Found = True
@@ -457,35 +537,65 @@ def FormatDuration(Seconds: float) -> str:
 def DetermineStatus(
     WorkDir: Path,
     StepFolders: Sequence[int],
+    Events: Sequence["StatusLog.LogEvent"],
+    LiveIds: Optional[Set[str]] = None,
 ) -> Tuple[str, str, str, str]:
-    """Return status, done flag, failed flag, and detail."""
+    """Return status, done flag, failed flag, and detail.
+
+    Sources: the engine's authoritative terminal markers via `stat`
+    (volsearch_is_done / sguschi_failed / maxruntime_reached), the unified log for
+    started/exit/killed/submitted lifecycle, and the scheduler liveness set for
+    the stuck verdict. ``LiveIds`` is the per-refresh set of live scheduler job
+    IDs, or None when liveness is unknown (off-cluster / query failed) — in which
+    case a sim is never flagged STUCK on scheduler grounds.
+    """
     if not WorkDir.exists():
         return "MISSING", "N", "Y", "missing"
     if not WorkDir.is_dir():
         return "MISSING", "N", "Y", "not a directory"
 
-    FailedMarker = WorkDir / "sguschi_failed"
-    DoneMarker = WorkDir / "volsearch_is_done"
-    VaspState = CheckVaspState(WorkDir, StepFolders)
-
-    if DoneMarker.exists():
-        MaxRuntimeMarker = WorkDir / "maxruntime_reached"
-        Detail = "max runtime" if MaxRuntimeMarker.exists() else "done"
+    # 1-3: engine terminal markers win (authoritative; cheap stat).
+    if (WorkDir / "volsearch_is_done").exists():
+        Detail = "max runtime" if (WorkDir / "maxruntime_reached").exists() else "done"
         return "DONE", "Y", "N", Detail
-    if VaspState == "queued":
-        return "RUNNING", "N", "N", "queued"
-    if FailedMarker.exists():
+    if (WorkDir / "sguschi_failed").exists():
         return "FAILED", "N", "Y", "sguschi_failed"
 
-    # scheduler-neutral markers written by SGUSCHI.py
-    _StartedMtime, _ExitCode, _WasKilled = ReadJobMarkers(WorkDir)
-    if _WasKilled:
+    # 4-5: last lifecycle event from the unified log (order-correct across
+    # restarts: a fresh 'started' supersedes any earlier 'exit'/'killed').
+    Lifecycle = [E for E in Events if E.Event in ("started", "exit", "killed")]
+    Last = Lifecycle[-1] if Lifecycle else None
+    if Last is not None and Last.Event == "killed":
         return "KILLED", "N", "Y", "killed"
-    if _ExitCode is not None:
-        if _ExitCode == 0:
+    if Last is not None and Last.Event == "exit":
+        Rc = ParseExitCode(Last.Detail)
+        if Rc == 0:
             return "DONE", "Y", "N", "exit 0"
-        return "FAILED", "N", "Y", "exit {}".format(_ExitCode)
-    if _StartedMtime is not None:
+        return "FAILED", "N", "Y", "exit {}".format((Last.Detail or "").strip() or "?")
+
+    # 6: scheduler-aware stuck — the current step's job is gone while its OUTCAR
+    # has not completed. Only with a known job ID, past the submit grace, and a
+    # successful scheduler query (LiveIds is not None).
+    VaspState = CheckVaspState(WorkDir, StepFolders)
+    InFlightStep = (StepFolders[-1] + 1) if StepFolders else 1
+    Submits = ParseSubmitEvents(Events).get(InFlightStep, [])
+    CurrentSubmitTs, CurrentJobId = Submits[-1] if Submits else (None, None)
+    Incomplete = not OutcarHasCompleted(WorkDir / "OUTCAR")
+
+    if (
+        Incomplete
+        and CurrentJobId is not None
+        and CurrentSubmitTs is not None
+        and (time.time() - CurrentSubmitTs.timestamp()) > SUBMIT_GRACE_SECONDS
+        and LiveIds is not None
+        and CurrentJobId not in LiveIds
+    ):
+        return "STUCK", "N", "N", "Check .out file and resubmit"
+
+    # 7: still alive / waiting.
+    if VaspState == "queued":
+        return "RUNNING", "N", "N", "queued"
+    if Last is not None and Last.Event == "started":
         return "RUNNING", "N", "N", "started"
 
     RecentActivity = LatestActivityTime(WorkDir)
@@ -553,10 +663,11 @@ def CheckVaspState(WorkDir: Path, StepFolders: Sequence[int]) -> Optional[str]:
     return "stuck"
 
 
-def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
-    """Build one summary row."""
+def BuildRow(Label: str, WorkDir: Path, LiveIds: Optional[Set[str]] = None) -> SimulationRow:
+    """Build one summary row. ``LiveIds`` is the per-refresh scheduler liveness set."""
     StepFolders = NumericStepFolders(WorkDir)
-    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders)
+    Events = StatusLog.ReadEvents(WorkDir) if WorkDir.exists() else []
+    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders, Events, LiveIds)
     RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
@@ -569,7 +680,7 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
         TotalO2Added=TotalO2Added,
         MoleculesRemoved=MoleculesRemoved,
         WallTime=EstimateWallTime(WorkDir, StepFolders),
-        QueueTime=ComputeQueueTime(WorkDir, StepFolders),
+        QueueTime=ComputeQueueTime(WorkDir, StepFolders, Events),
         Done=Done,
         Failed=Failed,
         Detail=Detail,
@@ -579,11 +690,19 @@ def BuildRow(Label: str, WorkDir: Path) -> SimulationRow:
 def BuildSummary(
     RootDir: Path,
     OxParamsPath: Optional[Path] = None,
+    LiveIds=_AUTO_LIVE_IDS,
 ) -> List[SimulationRow]:
-    """Scan RootDir and return all summary rows."""
+    """Scan RootDir and return all summary rows.
+
+    The scheduler is queried once per pass (``LiveJobIds``) and the resulting
+    live-ID set is reused for every simulation. Pass an explicit ``LiveIds`` (a
+    set, or None for "unknown") to bypass the query — used by tests.
+    """
     RootDir = RootDir.resolve()
     Simulations = DiscoverSimulations(RootDir, OxParamsPath)
-    return [BuildRow(Label, WorkDir) for Label, WorkDir in Simulations]
+    if LiveIds is _AUTO_LIVE_IDS:
+        LiveIds = LiveJobIds()
+    return [BuildRow(Label, WorkDir, LiveIds) for Label, WorkDir in Simulations]
 
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:

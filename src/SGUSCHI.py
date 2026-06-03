@@ -19,6 +19,7 @@ Re-run behaviour:
 import argparse
 import ast
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -27,6 +28,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
+
+from utils import StatusLog
 
 # ---------------------------------------------------------------------------
 # Path constants — derived from this file's location (src/SGUSCHI.py)
@@ -284,15 +287,24 @@ def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> 
                 if Result.stderr.strip():
                     print("  [{}]   stderr: {}".format(Label, Result.stderr.strip()))
                 WriteMarker(VolSearchDir / "job.exit", "-1")
+                StatusLog.Append(VolSearchDir, "SGUSCHI", "exit", "-1")
                 Failed.add(Label)
+            else:
+                # Initial step is step 1; log its job ID so the in-flight step is
+                # liveness-trackable before volsearch_cont's first poll.
+                JobId = ParseJobId(Result.stdout)
+                if JobId:
+                    StatusLog.Append(VolSearchDir, "SGUSCHI", "submitted", "1 {}".format(JobId))
         except FileNotFoundError:
             print("  [{}] ERROR: '{}' not on PATH — initial VASP submission failed".format(
                 Label, VaspCmd[0]))
             WriteMarker(VolSearchDir / "job.exit", "-1")
+            StatusLog.Append(VolSearchDir, "SGUSCHI", "exit", "-1")
             Failed.add(Label)
         except Exception as E:
             print("  [{}] ERROR: initial VASP submission failed: {!r}".format(Label, E))
             WriteMarker(VolSearchDir / "job.exit", "-1")
+            StatusLog.Append(VolSearchDir, "SGUSCHI", "exit", "-1")
             Failed.add(Label)
     return Failed
 
@@ -312,6 +324,22 @@ def WriteMarker(MarkerPath: Path, Content: str = "") -> None:
         pass
 
 
+def ParseJobId(Text: str) -> Optional[str]:
+    """Extract a scheduler job ID from submission output (Slurm or PBS).
+
+    Slurm `sbatch` prints 'Submitted batch job 12345'; PBS `qsub` prints
+    '12345.head' or '12345'. Returns None if no ID is found.
+    """
+    Match = re.search(r"Submitted batch job (\d+)", Text or "")
+    if Match:
+        return Match.group(1)
+    for Token in (Text or "").split():
+        Lead = Token.split(".", 1)[0]
+        if Lead.isdigit():
+            return Lead
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -323,12 +351,13 @@ def _MakeSigtermHandler(Procs: Dict[str, Tuple[subprocess.Popen, Path]]):
         for Label, (Proc, Vsd) in Procs.items():
             if Proc.poll() is None:
                 Proc.terminate()
-                WriteMarker(Vsd / "job.killed",
-                            "killed by SIGTERM at {}".format(datetime.now().isoformat()))
-                print("  [{}] terminated + job.killed written".format(Label))
+                StatusLog.Append(Vsd, "SGUSCHI", "killed",
+                                 "SIGTERM at {}".format(datetime.now().isoformat(timespec="seconds")))
+                print("  [{}] terminated + killed event written".format(Label))
             else:
                 RC = Proc.returncode
                 WriteMarker(Vsd / "job.exit", str(RC))
+                StatusLog.Append(Vsd, "SGUSCHI", "exit", str(RC))
         sys.exit(1)
     return Handler
 
@@ -337,7 +366,8 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     """Launch volsearch_cont in parallel for all pending simulation dirs.
 
     Runs on the compute node. Blocks until all processes finish.
-    Writes job.started / job.exit / job.killed markers in each Dir_VolSearch.
+    Appends started/exit/killed events to each Dir_VolSearch's sim_log.tsv (via
+    StatusLog) and keeps the job.exit marker that ClassifySimulations reads.
     """
     # Validate binary
     if not VOLSEARCH_CONT.exists():
@@ -360,13 +390,15 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
 
     for Label, Vsd in PendingDirs:
         # Clear stale terminal markers from a previous attempt so
-        # SimulationSummary doesn't report the restarted sim as FAILED/KILLED
-        # before volsearch_cont rewrites them at exit. (volsearch_cont also
-        # removes sguschi_failed at startup; clearing it here closes the brief
-        # window before that and keeps the restart cleanup consistent.)
-        for Stale in ("job.exit", "job.killed", "sguschi_failed"):
+        # SimulationSummary doesn't report the restarted sim as FAILED before
+        # volsearch_cont rewrites them at exit. (volsearch_cont also removes
+        # sguschi_failed at startup; clearing it here closes the brief window
+        # before that and keeps the restart cleanup consistent.) The append-only
+        # sim_log.tsv is not cleared — the 'started' event below delineates this
+        # run from any prior one, so stale terminal events never mask a restart.
+        for Stale in ("job.exit", "sguschi_failed"):
             (Vsd / Stale).unlink(missing_ok=True)
-        WriteMarker(Vsd / "job.started", datetime.now().isoformat())
+        StatusLog.Append(Vsd, "SGUSCHI", "started", datetime.now().isoformat(timespec="seconds"))
         LogPath = Vsd.parent / "log.out"
         try:
             LogFile = open(str(LogPath), "a", encoding="utf-8")
@@ -382,6 +414,7 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
         except OSError as E:
             print("  [{}] ERROR launching volsearch_cont: {}".format(Label, E))
             WriteMarker(Vsd / "job.exit", "-1")
+            StatusLog.Append(Vsd, "SGUSCHI", "exit", "-1")
             LaunchFailures += 1
 
     if not Procs:
@@ -415,6 +448,7 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     for Label, (Proc, Vsd) in Procs.items():
         RC = Proc.wait()
         WriteMarker(Vsd / "job.exit", str(RC))
+        StatusLog.Append(Vsd, "SGUSCHI", "exit", str(RC))
         Status = "OK" if RC == 0 else "FAILED (exit {})".format(RC)
         print("  [{}] volsearch_cont finished — {}".format(Label, Status))
         if RC != 0:

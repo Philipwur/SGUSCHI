@@ -137,9 +137,6 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
     endif
     echo "WARNING volsearch_cont: OUTCAR is empty on restart, no valid submission record for step $nstep. Resubmitting."
     echo $nstep > $submission_marker
-    # Record submission time for queue-time reporting (best-effort; must never affect control flow).
-    set _submit_ts = `date '+%Y.%m.%d %H:%M:%S'`
-    echo "$nstep $_submit_ts" >> .submit_times
     rm -f $submission_log
     ( $vaspcmd jobsub ) >>& $submission_log
     set submit_status = $?
@@ -153,6 +150,17 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
         echo "FATAL volsearch_cont: resubmission at startup failed. See $submission_log for the scheduler error."
         touch $failure_marker
         exit 1
+      endif
+    endif
+    # Record the submission (step + scheduler job ID) in the unified log for the
+    # summary. Best-effort: never affects control flow. Only a purely numeric job
+    # ID is logged so the summary never flags a bogus ID as a dead job.
+    set _jobid = `grep -o 'Submitted batch job [0-9][0-9]*' $submission_log | awk '{print $NF}' | head -1`
+    if ( "$_jobid" == "" ) set _jobid = `head -1 $submission_log | awk '{print $1}' | sed 's/\..*//'`
+    if ( "$_jobid" != "" ) then
+      echo "$_jobid" | grep -q '^[0-9][0-9]*$'
+      if ( $? == 0 ) then
+        ( python "$sluschipath/../../utils/StatusLog.py" append --source volsearch_cont --event submitted --detail "$nstep $_jobid" ) >& /dev/null
       endif
     endif
   endif
@@ -633,9 +641,6 @@ while ($stopflag == 0)
       set nextstep = `expr $nstep + 1`
       echo $nextstep > poscar_built_for_step
       echo $nextstep > $submission_marker
-      # Record submission time for queue-time reporting (best-effort; must never affect control flow).
-      set _submit_ts = `date '+%Y.%m.%d %H:%M:%S'`
-      echo "$nextstep $_submit_ts" >> .submit_times
       rm -f $submission_log
       ( $vaspcmd jobsub ) >>& $submission_log
       set submit_status = $?
@@ -652,6 +657,17 @@ while ($stopflag == 0)
         endif
       endif
       set nstep = $nextstep
+      # Record the submission (step + scheduler job ID) in the unified log for the
+      # summary. Best-effort: never affects control flow. Only a purely numeric job
+      # ID is logged so the summary never flags a bogus ID as a dead job.
+      set _jobid = `grep -o 'Submitted batch job [0-9][0-9]*' $submission_log | awk '{print $NF}' | head -1`
+      if ( "$_jobid" == "" ) set _jobid = `head -1 $submission_log | awk '{print $1}' | sed 's/\..*//'`
+      if ( "$_jobid" != "" ) then
+        echo "$_jobid" | grep -q '^[0-9][0-9]*$'
+        if ( $? == 0 ) then
+          ( python "$sluschipath/../../utils/StatusLog.py" append --source volsearch_cont --event submitted --detail "$nstep $_jobid" ) >& /dev/null
+        endif
+      endif
       echo Job $nstep submitted. Waiting for job $nstep to finish...
     endif
   endif
