@@ -33,7 +33,15 @@ from utils import StatusLog
 # Stuck detection: a step whose scheduler job is gone while its OUTCAR has not
 # yet completed is dead. A short grace absorbs the submit->appears-in-queue and
 # completed->processed races before the verdict is trusted.
+#
+# The scheduler is only consulted when a sim actually looks suspicious: OUTCAR
+# missing, empty, or unmodified for PROGRESS_STALE_SECONDS (a healthy VASP job
+# rewrites OUTCAR every ionic step). The real squeue/qstat query is further
+# throttled to SCHEDULER_QUERY_TTL_SECONDS so even a persistently stuck sweep
+# touches the scheduler at most once per window. Healthy runs query zero times.
 SUBMIT_GRACE_SECONDS = 120
+PROGRESS_STALE_SECONDS = 15 * 60        # OUTCAR quiet this long -> consult scheduler
+SCHEDULER_QUERY_TTL_SECONDS = 10 * 60   # max real squeue/qstat rate
 
 # Sentinel so callers can pass LiveIds=None ("scheduler unknown") explicitly,
 # distinct from the default "auto-detect and query the scheduler once".
@@ -297,6 +305,21 @@ def LiveJobIds() -> Optional[Set[str]]:
     return None
 
 
+_SchedulerCacheValue: Optional[Set[str]] = None
+_SchedulerCacheStamp: Optional[float] = None  # time.monotonic() of last real query
+
+
+def CachedLiveJobIds() -> Optional[Set[str]]:
+    """LiveJobIds() throttled to once per SCHEDULER_QUERY_TTL_SECONDS."""
+    global _SchedulerCacheValue, _SchedulerCacheStamp
+    Now = time.monotonic()
+    if _SchedulerCacheStamp is not None and Now - _SchedulerCacheStamp < SCHEDULER_QUERY_TTL_SECONDS:
+        return _SchedulerCacheValue
+    _SchedulerCacheValue = LiveJobIds()
+    _SchedulerCacheStamp = Now
+    return _SchedulerCacheValue
+
+
 def _RunJobIdQuery(Command: Sequence[str], Parser) -> Optional[Set[str]]:
     """Run a scheduler query and parse live job IDs; any failure → None."""
     try:
@@ -362,6 +385,22 @@ def OutcarHasCompleted(OutcarPath: Path) -> bool:
     except OSError:
         return False
     return b"Total CPU" in Tail
+
+
+def SchedulerCheckWarranted(OutcarPath: Path) -> bool:
+    """True when OUTCAR shows no recent progress, so the job may be dead.
+
+    A live VASP MD job rewrites OUTCAR every ionic step; a missing, empty, or
+    long-frozen OUTCAR is the cheap local signal that warrants asking the
+    scheduler whether the job is still alive.
+    """
+    try:
+        Stat = OutcarPath.stat()
+    except OSError:
+        return True              # missing OUTCAR -> suspicious
+    if Stat.st_size == 0:
+        return True              # never produced output (e.g. died in queue / at launch)
+    return time.time() - Stat.st_mtime > PROGRESS_STALE_SECONDS
 
 
 def ParseSubmitEvents(Events: Sequence["StatusLog.LogEvent"]) -> Dict[int, List[Tuple[datetime.datetime, Optional[str]]]]:
@@ -538,16 +577,17 @@ def DetermineStatus(
     WorkDir: Path,
     StepFolders: Sequence[int],
     Events: Sequence["StatusLog.LogEvent"],
-    LiveIds: Optional[Set[str]] = None,
+    LiveIdsProvider=None,
 ) -> Tuple[str, str, str, str]:
     """Return status, done flag, failed flag, and detail.
 
     Sources: the engine's authoritative terminal markers via `stat`
     (volsearch_is_done / sguschi_failed / maxruntime_reached), the unified log for
     started/exit/killed/submitted lifecycle, and the scheduler liveness set for
-    the stuck verdict. ``LiveIds`` is the per-refresh set of live scheduler job
-    IDs, or None when liveness is unknown (off-cluster / query failed) — in which
-    case a sim is never flagged STUCK on scheduler grounds.
+    the stuck verdict. ``LiveIdsProvider`` is a zero-arg callable returning the
+    set of live scheduler job IDs (or None when liveness is unknown). It is
+    invoked only when a sim looks suspicious (see ``SchedulerCheckWarranted``),
+    so a healthy sim never triggers a scheduler query.
     """
     if not WorkDir.exists():
         return "MISSING", "N", "Y", "missing"
@@ -574,23 +614,28 @@ def DetermineStatus(
         return "FAILED", "N", "Y", "exit {}".format((Last.Detail or "").strip() or "?")
 
     # 6: scheduler-aware stuck — the current step's job is gone while its OUTCAR
-    # has not completed. Only with a known job ID, past the submit grace, and a
-    # successful scheduler query (LiveIds is not None).
+    # has not completed. Only with a known job ID, past the submit grace, no
+    # recent OUTCAR progress (the warrant gate), and a successful scheduler query.
     VaspState = CheckVaspState(WorkDir, StepFolders)
     InFlightStep = (StepFolders[-1] + 1) if StepFolders else 1
     Submits = ParseSubmitEvents(Events).get(InFlightStep, [])
     CurrentSubmitTs, CurrentJobId = Submits[-1] if Submits else (None, None)
-    Incomplete = not OutcarHasCompleted(WorkDir / "OUTCAR")
+    OutcarPath = WorkDir / "OUTCAR"
+    Incomplete = not OutcarHasCompleted(OutcarPath)
+    PastGrace = (
+        CurrentSubmitTs is not None
+        and (time.time() - CurrentSubmitTs.timestamp()) > SUBMIT_GRACE_SECONDS
+    )
 
     if (
         Incomplete
         and CurrentJobId is not None
-        and CurrentSubmitTs is not None
-        and (time.time() - CurrentSubmitTs.timestamp()) > SUBMIT_GRACE_SECONDS
-        and LiveIds is not None
-        and CurrentJobId not in LiveIds
+        and PastGrace
+        and SchedulerCheckWarranted(OutcarPath)
     ):
-        return "STUCK", "N", "N", "Check .out file and resubmit"
+        LiveIds = LiveIdsProvider() if LiveIdsProvider is not None else None
+        if LiveIds is not None and CurrentJobId not in LiveIds:
+            return "STUCK", "N", "N", "Check .out file and resubmit"
 
     # 7: still alive / waiting.
     if VaspState == "queued":
@@ -663,11 +708,11 @@ def CheckVaspState(WorkDir: Path, StepFolders: Sequence[int]) -> Optional[str]:
     return "stuck"
 
 
-def BuildRow(Label: str, WorkDir: Path, LiveIds: Optional[Set[str]] = None) -> SimulationRow:
-    """Build one summary row. ``LiveIds`` is the per-refresh scheduler liveness set."""
+def BuildRow(Label: str, WorkDir: Path, LiveIdsProvider=None) -> SimulationRow:
+    """Build one summary row. ``LiveIdsProvider`` is the lazy scheduler liveness query."""
     StepFolders = NumericStepFolders(WorkDir)
     Events = StatusLog.ReadEvents(WorkDir) if WorkDir.exists() else []
-    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders, Events, LiveIds)
+    Status, Done, Failed, Detail = DetermineStatus(WorkDir, StepFolders, Events, LiveIdsProvider)
     RateRows, SimTime, TotalO2Added, MoleculesRemoved = ReadRateAnalysis(WorkDir)
 
     return SimulationRow(
@@ -694,15 +739,20 @@ def BuildSummary(
 ) -> List[SimulationRow]:
     """Scan RootDir and return all summary rows.
 
-    The scheduler is queried once per pass (``LiveJobIds``) and the resulting
-    live-ID set is reused for every simulation. Pass an explicit ``LiveIds`` (a
-    set, or None for "unknown") to bypass the query — used by tests.
+    The scheduler is queried lazily and at most once per
+    ``SCHEDULER_QUERY_TTL_SECONDS`` (``CachedLiveJobIds``), and only for sims that
+    look suspicious — so healthy runs make no scheduler calls. Pass an explicit
+    ``LiveIds`` (a set, or None for "unknown") to bypass the query — used by tests.
     """
     RootDir = RootDir.resolve()
     Simulations = DiscoverSimulations(RootDir, OxParamsPath)
-    if LiveIds is _AUTO_LIVE_IDS:
-        LiveIds = LiveJobIds()
-    return [BuildRow(Label, WorkDir, LiveIds) for Label, WorkDir in Simulations]
+
+    def ConstantProvider() -> Optional[Set[str]]:
+        return None if LiveIds is _AUTO_LIVE_IDS else LiveIds
+
+    # Auto: lazy + TTL-cached real query. Explicit set/None (tests): constant.
+    Provider = CachedLiveJobIds if LiveIds is _AUTO_LIVE_IDS else ConstantProvider
+    return [BuildRow(Label, WorkDir, Provider) for Label, WorkDir in Simulations]
 
 
 def FormatTable(Rows: Sequence[SimulationRow]) -> str:

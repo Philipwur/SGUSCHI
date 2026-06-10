@@ -31,9 +31,12 @@ def NoScheduler(monkeypatch: pytest.MonkeyPatch) -> None:
     """Default every test to 'scheduler unknown' so no real squeue/qstat runs.
 
     Stuck tests inject an explicit LiveIds set via BuildSummary(..., LiveIds=...),
-    which bypasses LiveJobIds entirely.
+    which bypasses LiveJobIds entirely. The module-level scheduler cache is reset
+    so auto-path tests never see a value cached by a prior test.
     """
     monkeypatch.setattr(Summary, "LiveJobIds", lambda: None)
+    Summary._SchedulerCacheValue = None
+    Summary._SchedulerCacheStamp = None
 
 
 @pytest.fixture(name="RootDir")
@@ -706,3 +709,59 @@ def TestNotStuckWhenOutcarCompleted(RootDir: Path) -> None:
     Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
 
     assert Row.Status != "STUCK"
+
+
+def _SetOutcarAge(WorkDir: Path, Age: timedelta) -> None:
+    """Backdate the OUTCAR mtime so the warrant gate sees it as stale."""
+    Past = (datetime.now() - Age).timestamp()
+    os.utime(WorkDir / "OUTCAR", (Past, Past))
+
+
+def TestNotStuckWhenOutcarProgressing(RootDir: Path) -> None:
+    """Job absent from the queue but OUTCAR was written recently -> not STUCK.
+
+    A healthy run has an incomplete OUTCAR with a fresh mtime; the warrant gate
+    skips the scheduler entirely, so an absent job id must not flag STUCK.
+    """
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=10), OutcarBody="POSITION\n 0 0 0\n")
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
+
+    assert Row.Status == "RUNNING"
+
+
+def TestStuckWhenOutcarFrozenPastThreshold(RootDir: Path) -> None:
+    """Non-empty OUTCAR unmodified past the stale threshold + job gone -> STUCK."""
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=20), OutcarBody="POSITION\n 0 0 0\n")
+    _SetOutcarAge(WorkDir, timedelta(minutes=20))
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds={"999"}), "1273_2")
+
+    assert Row.Status == "STUCK"
+
+
+def TestSchedulerNotQueriedForHealthySim(RootDir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scheduler is consulted only when a sim is warranted (stale OUTCAR)."""
+    Calls = {"n": 0}
+
+    def Counting() -> set:
+        Calls["n"] += 1
+        return {"999"}  # job 555 absent
+
+    monkeypatch.setattr(Summary, "LiveJobIds", Counting)
+
+    WorkDir = MakeWorkDir(RootDir, "1273_2")
+    _SeedInFlightStep(WorkDir, "555", timedelta(minutes=20), OutcarBody="POSITION\n 0 0 0\n")
+
+    # Healthy: fresh OUTCAR -> no scheduler query, not stuck.
+    Row = FindRow(Summary.BuildSummary(RootDir), "1273_2")
+    assert Row.Status == "RUNNING"
+    assert Calls["n"] == 0
+
+    # Stale: OUTCAR frozen past the threshold -> exactly one real query -> STUCK.
+    _SetOutcarAge(WorkDir, timedelta(minutes=20))
+    Row = FindRow(Summary.BuildSummary(RootDir), "1273_2")
+    assert Row.Status == "STUCK"
+    assert Calls["n"] == 1
