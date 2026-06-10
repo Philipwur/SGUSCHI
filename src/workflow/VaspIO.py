@@ -15,6 +15,22 @@ import ast
 #from workflow import OxidationAnalysis as an
 
 
+# Scalar per-frame metadata shared by WriteXYZ and ReadXYZ so the two can never
+# drift apart. Each entry: (EnergiesColumn, ExtxyzKey, Decimals).
+#   Decimals = None -> format with WriteXYZ's `Precision` argument.
+# Step/Time are handled separately (int, append offsets) and are NOT listed here.
+ScalarMetaFields: List[Tuple[str, str, Optional[int]]] = [
+    ("EFree",       "EFree_eV",      None),
+    ("ETotal",      "ETotal_eV",     None),
+    ("EKin",        "EKin_eV",       None),
+    ("ETotMD",      "ETotMD_eV",     None),
+    ("ENoseS",      "ENoseS_eV",     None),
+    ("ENoseKE",     "ENoseKE_eV",    None),
+    ("Temperature", "Temperature_K", 2),
+    ("Pressure",    "Pressure_kB",   3),
+]
+
+
 '''
 need an xyz writer, with most relevatn data (time, energy, lattice vectors, positions)
 Probably need to think about atom tracking carefully. 
@@ -436,8 +452,12 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
                 Tabular data containing one row per ionic step, with columns:
 
                 - Step (int): Step index (1-based).
-                - EFree (float): Free energy of the ion–electron system (eV).
-                - ETotal (float): Total energy (electronic + ionic) (eV).
+                - EFree (float): Electronic free energy, VASP "free energy TOTEN" (eV).
+                - ETotal (float): Electronic energy without entropy / sigma->0 (eV).
+                - EKin (float): Ionic kinetic energy, VASP "EKIN" (eV); MD runs only, else NaN.
+                - ETotMD (float): Conserved MD Hamiltonian, VASP "ETOTAL" (eV); MD only, else NaN.
+                - ENoseS (float): Nose thermostat potential "ES" (eV); MD only, else NaN.
+                - ENoseKE (float): Nose thermostat kinetic "EPS" (eV); MD only, else NaN.
                 - EFermi (float): Fermi energy level (eV).
                 - Temperature (float): Instantaneous ionic temperature (K), if available.
                 - Pressure (float): Instantaneous pressure (bar if available, else kB).
@@ -694,12 +714,29 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
         if Hits:
             EFree = float(Hits[-1].group(1))
 
+        # "energy without entropy" (the internal electronic energy U_el) is what
+        # existing trajectories store as ETotal. Prefer it deterministically so a
+        # rewrite never silently swaps in the energy(sigma->0) value that appears on
+        # the same OUTCAR line. Fall back to sigma->0, then to EFree.
         ETotal = np.nan
-        Hits = list(re.finditer(r"(?:energy\s+without\s+entropy|energy\(sigma->0\))\s*=\s*([-\d\.Ee+]+)", Window, flags=re.I))
+        Hits = list(re.finditer(r"energy\s+without\s+entropy\s*=\s*([-\d\.Ee+]+)", Window, flags=re.I))
+        if not Hits:
+            Hits = list(re.finditer(r"energy\(sigma->0\)\s*=\s*([-\d\.Ee+]+)", Window, flags=re.I))
         if Hits:
             ETotal = float(Hits[-1].group(1))
         if np.isnan(ETotal):
             ETotal = EFree
+
+        # MD energy block (IBRION=0 only). Absent in static/relaxation runs, so each
+        # field stays NaN there and is simply omitted from the XYZ header.
+        def LastFloat(Pattern: str) -> float:
+            Matches = list(re.finditer(Pattern, Window, flags=re.I))
+            return float(Matches[-1].group(1)) if Matches else np.nan
+
+        EKin = LastFloat(r"kinetic\s+energy\s+EKIN\s*=\s*([-+\d\.Ee]+)")     # ionic kinetic energy
+        ETotMD = LastFloat(r"total\s+energy\s+ETOTAL\s*=\s*([-+\d\.Ee]+)")   # conserved MD Hamiltonian
+        ENoseS = LastFloat(r"nose\s+potential\s+ES\s*=\s*([-+\d\.Ee]+)")     # Nose thermostat potential
+        ENoseKE = LastFloat(r"nose\s+kinetic\s+EPS\s*=\s*([-+\d\.Ee]+)")     # Nose thermostat kinetic
 
         # Per-window temperature, pressure, EFermi, stress with global fallbacks
         MTemp = list(re.finditer(r"temperature\s+([-\d\.Ee+]+)\s*K", Window, flags=re.I))
@@ -727,6 +764,10 @@ def OutcarParser(WorkDir: Union[str, Path]) -> Dict[str, Any]:
             "Step": I + 1,
             "EFree": EFree,
             "ETotal": ETotal,
+            "EKin": EKin,
+            "ETotMD": ETotMD,
+            "ENoseS": ENoseS,
+            "ENoseKE": ENoseKE,
             "EFermi": StepFermi,
             "Temperature": StepTemp,   # K
             "Pressure": StepPress,     # kB
@@ -804,7 +845,8 @@ def ReadXYZ(
             {
                 "Positions": [pd.DataFrame],   # One per frame, columns ["Element","x","y","z"]
                 "Metadata":  pd.DataFrame,     # One row per frame:
-                                               # ["Step","Time","EFree","ETotal","Temperature","Pressure"]
+                                               # ["Step","Time","EFree","ETotal","EKin","ETotMD",
+                                               #  "ENoseS","ENoseKE","Temperature","Pressure"]
                 "CellDim":   pd.DataFrame,     # Averaged lattice vectors, 3 rows × 3 columns ["x","y","z"],
                                                # or None if no lattice found
             }
@@ -857,7 +899,9 @@ def ReadXYZ(
 
             # --- Read comment line ---
             Comment = File.readline().strip()
-            Step = TimeFs = EFree = ETotal = Temperature = Pressure = np.nan
+            Step = TimeFs = np.nan
+            # Scalar metadata columns default to NaN; populated below if present.
+            Scalars: Dict[str, float] = {Col: np.nan for Col, _, _ in ScalarMetaFields}
 
             CurrentFrameLatticeMatrix = LastKnownLatticeMatrix
 
@@ -876,48 +920,26 @@ def ReadXYZ(
                     except (ValueError, AttributeError):
                         pass
 
-                # Extract metadata via regex
+                # Step and time (time accepts Time, Timefs, Time_fs, Time(fs))
                 StepMatch = re.search(r"Step\s*=\s*(\d+)", Comment)
-                # Accept Time, Timefs, Time_fs, Time(fs), case-insensitive
                 TimeMatch = re.search(
                     r"\bTime(?:fs|_fs|\(fs\))?\s*=\s*([-\d\.Ee+]+)",
                     Comment,
                     re.IGNORECASE,
                 )
-                EFreeMatch = re.search(
-                    r"EFree[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-                ETotalMatch = re.search(
-                    r"ETotal[_\(]eV[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-                TempMatch = re.search(
-                    r"Temperature[_\(]K[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-                PressMatch = re.search(
-                    r"Pressure[_\(]kB[_\)]\s*=\s*([-\d\.Ee+]+)", Comment
-                )
-
                 if StepMatch:
                     Step = int(StepMatch.group(1))
                 if TimeMatch:
                     TimeFs = float(TimeMatch.group(1))
-                if EFreeMatch:
-                    EFree = float(EFreeMatch.group(1))
-                if ETotalMatch:
-                    ETotal = float(ETotalMatch.group(1))
-                if TempMatch:
-                    Temperature = float(TempMatch.group(1))
-                if PressMatch:
-                    Pressure = float(PressMatch.group(1))
 
-            MetadataRows.append({
-                "Step": Step,
-                "Time": TimeFs,
-                "EFree": EFree,
-                "ETotal": ETotal,
-                "Temperature": Temperature,
-                "Pressure": Pressure,
-            })
+                # Scalar energies/temperature/pressure via the shared field spec, so
+                # every key WriteXYZ emits is parsed back into the same column.
+                for Col, Key, _ in ScalarMetaFields:
+                    Match = re.search(rf"{re.escape(Key)}\s*=\s*([-\d\.Ee+]+)", Comment)
+                    if Match:
+                        Scalars[Col] = float(Match.group(1))
+
+            MetadataRows.append({"Step": Step, "Time": TimeFs, **Scalars})
 
             # --- Read atom block ---
             Elements, X, Y, Z = [], [], [], []
@@ -1104,12 +1126,6 @@ def WriteXYZ(
             StepNumber = int(EnergyRow.get("Step", FrameIndex + 1)) + StepOffset
             TimeFs = float(TimesFsList[FrameIndex]) + TimeOffset
 
-            # --- Extract Physics Data (Robust) ---
-            EFree = float(EnergyRow.get("EFree", np.nan))
-            ETotal = float(EnergyRow.get("ETotal", np.nan))
-            TemperatureK = float(EnergyRow.get("Temperature", np.nan))
-            PressureKB = float(EnergyRow.get("Pressure", np.nan))
-
             # --- Construct Header ---
             if ExtendedXYZ:
                 # We build the list directly to avoid Dict overhead
@@ -1118,16 +1134,24 @@ def WriteXYZ(
                     PropTag,
                     f'pbc="{PbcStr}"'
                 ]
-                
+
                 if not np.isnan(TimeFs): CommentParts.append(f'Time={FloatFmt.format(TimeFs)}')
                 if not np.isnan(StepNumber): CommentParts.append(f'Step={StepNumber}')
-                if not np.isnan(EFree): CommentParts.append(f'EFree_eV={FloatFmt.format(EFree)}')
-                if not np.isnan(ETotal): CommentParts.append(f'ETotal_eV={FloatFmt.format(ETotal)}')
-                if not np.isnan(TemperatureK): CommentParts.append(f'Temperature_K={TemperatureK:.2f}')
-                if not np.isnan(PressureKB): CommentParts.append(f'Pressure_kB={PressureKB:.3f}')
-                
+
+                # Scalar energies/temperature/pressure via the shared field spec, so the
+                # keys emitted here always match what ReadXYZ parses back. Fields absent
+                # from this run (e.g. MD energies in a static OUTCAR) are NaN and skipped.
+                for Col, Key, Decimals in ScalarMetaFields:
+                    Value = float(EnergyRow.get(Col, np.nan))
+                    if np.isnan(Value):
+                        continue
+                    Formatted = FloatFmt.format(Value) if Decimals is None else f"{Value:.{Decimals}f}"
+                    CommentParts.append(f"{Key}={Formatted}")
+
                 CommentLine = " ".join(CommentParts)
             else:
+                EFree = float(EnergyRow.get("EFree", np.nan))
+                ETotal = float(EnergyRow.get("ETotal", np.nan))
                 Parts = [f"Step = {StepNumber}"]
                 if not np.isnan(TimeFs): Parts.append(f"Time = {FloatFmt.format(TimeFs)}")
                 if not np.isnan(EFree): Parts.append(f"EFree = {FloatFmt.format(EFree)} eV")

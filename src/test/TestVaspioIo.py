@@ -130,6 +130,10 @@ def TestWriteReadXyzRoundtrip(TmpPath: Path) -> None:
             "Step": [1, 2],
             "EFree": [-1.0, -1.1],
             "ETotal": [-0.9, -1.0],
+            "EKin": [0.25, 0.30],
+            "ETotMD": [-0.65, -0.70],
+            "ENoseS": [0.001, 0.002],
+            "ENoseKE": [0.0005, 0.0006],
             "Temperature": [1000.0, 1000.0],
             "Pressure": [0.0, 0.0],
         }
@@ -152,9 +156,15 @@ def TestWriteReadXyzRoundtrip(TmpPath: Path) -> None:
     Meta = Parsed["Metadata"].iloc[0]
     assert Meta["Step"] == 1
     assert Meta["Time"] == 1.0
-    # ExtendedXYZ energy fields are not parsed by the current ReadXYZ regex.
-    assert np.isnan(Meta["EFree"])
-    assert np.isnan(Meta["ETotal"])
+    # Every scalar field round-trips through the shared ScalarMetaFields spec.
+    assert Meta["EFree"] == pytest.approx(-1.0)
+    assert Meta["ETotal"] == pytest.approx(-0.9)
+    assert Meta["EKin"] == pytest.approx(0.25)
+    assert Meta["ETotMD"] == pytest.approx(-0.65)
+    assert Meta["ENoseS"] == pytest.approx(0.001)
+    assert Meta["ENoseKE"] == pytest.approx(0.0005)
+    assert Meta["Temperature"] == pytest.approx(1000.0)
+    assert Meta["Pressure"] == pytest.approx(0.0)
 
     Roundtrip = Parsed["Positions"][0][["x", "y", "z"]].values
     assert np.allclose(Roundtrip, Frame1[["x", "y", "z"]].values, atol=1e-8)

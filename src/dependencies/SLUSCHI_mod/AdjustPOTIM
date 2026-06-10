@@ -1,10 +1,14 @@
 #!/bin/csh
 
+# General Purpose of this script is to adjsut the timestep of MD simulations
+# based off of how quickly the SCF calculations converge. 
+# Fast convergence allows for larger timestep. 
+
 set sluschipath = ""
 if ( $?sguschipath ) set sluschipath = "$sguschipath"
 if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
-# FIX 2: Add path prefix
+# Add path prefix
 $sluschipath/getinfo.csh adj_potim job.in > /dev/null
 if ( $? == 0 ) then
   @ flag_adj = `$sluschipath/getinfo.csh adj_potim job.in`

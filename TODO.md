@@ -31,6 +31,14 @@
 - Add more runtime checks to ensure things are running smoothly.
 - Elemental mass dictionary only covers O, C, Zr, N; additional elements must be added manually to `OxidationAnalysis.py`.
 
+## Job Submission Resilience
+
+- Make `sbatch` submission resilient to transient scheduler failures (e.g. `Batch job submission failed: Socket timed out on send/recv operation`). A single failed `sbatch` currently silently halts a run.
+  + Root cause: `$vaspcmd jobsub >> jobsub.log` in the `autojob*`/`volsearch*` scripts (e.g. `autojob_cont:226`) never checks the exit status. With `detectfail = 0` (the default; not set in `job.in`) the polling loop then waits forever on an OUTCAR that is never produced, until walltime kills `volsearch_cont`. With `detectfail = 1` recovery only happens after ~`maxwaithour×6` (≈24 h).
+  + Impact is fleet-wide: every `volsearch_cont` resubmits every MD cycle, so a single `slurmctld` overload/outage window fails all concurrent sims at once.
+  + Fix: add an `sbatch_retry` wrapper (retry with backoff on transient errors) and point `vaspcmd` at it via `job.in`, so the Fortran binary needs no change.
+  + Also add an explicit exit-status check after each submission line in `autojob_cont` (and siblings): on permanent failure write a marker (e.g. `sguschi_failed`) instead of hanging silently. Ties in with PrepareWorkPlace item "Add error file if job fails in jobsub."
+
 ## SLUSCHI Source
 
 - Change .sluschi.rc / make so that there is a sluschipath2/sguschipath, then you can install both SLUSCHI and SGUSCHI without conflict. Make sure all references to sluschipath are changed to sluschipath2 or sguschipath.
