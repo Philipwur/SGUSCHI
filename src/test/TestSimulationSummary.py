@@ -296,6 +296,30 @@ def TestRateAnalysisO2AndRemovedTotalsAreParsed(RootDir: Path) -> None:
     assert Row.MoleculesRemoved == "2"
 
 
+def TestRateAnalysisCacheRefreshesWhenFileGrows(RootDir: Path) -> None:
+    """The (size, mtime) cache must re-parse after the CSV is appended to.
+
+    Guards the watch-daemon optimisation that parses RateAnalysis.csv only on
+    change: a stale cache would freeze RateRows/SimTime at their first values.
+    """
+    WorkDir = MakeWorkDir(RootDir, "1273_8")
+    (WorkDir / "1").mkdir()
+    RatePath = WorkDir / "RateAnalysis.csv"
+    RatePath.write_text("Time (fs),O2 Count,O2 Added\n0,10,10\n", encoding="utf-8")
+
+    First = FindRow(Summary.BuildSummary(RootDir), "1273_8")
+    assert First.RateRows == "1"
+    assert First.SimTime_ps == "0"
+
+    with RatePath.open("a", encoding="utf-8") as File:
+        File.write("160.5,9,12\n")
+
+    Second = FindRow(Summary.BuildSummary(RootDir), "1273_8")
+    assert Second.RateRows == "2"
+    assert Second.SimTime_ps == "0.1605"
+    assert Second.TotalO2Added == "12"
+
+
 def TestMissingGasRemovedColumnLeavesRemovedTotalBlank(RootDir: Path) -> None:
     """Missing Gas Removed should not prevent other RateAnalysis metrics."""
     WorkDir = MakeWorkDir(RootDir, "1273_6")

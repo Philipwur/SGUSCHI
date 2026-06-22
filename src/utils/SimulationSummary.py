@@ -193,12 +193,42 @@ def NaturalSortKey(Text: str) -> Tuple:
     return tuple(Key)
 
 
+# Per-path cache so the watch daemon parses RateAnalysis.csv only when it actually
+# changes. The CSV is appended roughly once per cycle but the summary refreshes
+# every minute; without this the unbounded file is fully re-read on every refresh
+# (and re-synced on OneDrive-backed paths). Keyed by path -> ((size, mtime), metrics).
+_RateCache: Dict[str, Tuple[Tuple[int, float], Tuple[str, str, str, str]]] = {}
+
+
 def ReadRateAnalysis(WorkDir: Path) -> Tuple[str, str, str, str]:
-    """Return compact RateAnalysis metrics without importing pandas."""
+    """Return compact RateAnalysis metrics, re-parsing only when the file changes.
+
+    The full parse (``_ParseRateAnalysis``) runs at most once per actual append
+    instead of once per refresh — the OUTCAR tail-read equivalent for this growing
+    CSV. A size or mtime change invalidates the cache; a missing file clears it.
+    Transient read errors are not cached so they retry on the next refresh.
+    """
     RatePath = WorkDir / "RateAnalysis.csv"
-    if not RatePath.exists():
+    Key = str(RatePath)
+    try:
+        Stat = RatePath.stat()
+    except OSError:
+        _RateCache.pop(Key, None)
         return "-", "-", "-", "-"
 
+    Signature = (Stat.st_size, Stat.st_mtime)
+    Cached = _RateCache.get(Key)
+    if Cached is not None and Cached[0] == Signature:
+        return Cached[1]
+
+    Metrics = _ParseRateAnalysis(RatePath)
+    if Metrics[0] != "ERR":
+        _RateCache[Key] = (Signature, Metrics)
+    return Metrics
+
+
+def _ParseRateAnalysis(RatePath: Path) -> Tuple[str, str, str, str]:
+    """Parse RateAnalysis.csv into (rows, sim-time, O2 added, molecules removed)."""
     try:
         with RatePath.open("r", encoding="utf-8-sig", errors="ignore", newline="") as File:
             Reader = csv.DictReader(File)
