@@ -3,7 +3,11 @@
 set failure_marker = sguschi_failed
 set submission_marker = .vasp_submitted_step
 set submission_log = .vasp_submit_last.out
-rm -f $failure_marker
+set await_marker = awaiting_manual_submission
+# Clear stale terminal/wait markers from a previous run. A genuine wait state is
+# re-established below if a submission fails; clearing here means a fresh master
+# start auto-recovers via the startup guard instead of looking parked.
+rm -f $failure_marker $await_marker
 
 set sluschipath = ""
 if ( $?sguschipath ) set sluschipath = "$sguschipath"
@@ -146,10 +150,16 @@ if ( $nstep > 1 && ! -s OUTCAR ) then
       if ( $? == 0 ) then
         echo "WARNING volsearch_cont: startup resubmission timed out after Slurm may have accepted the job. Waiting for job $nstep."
       else
+        # Scheduler rejected the resubmission and queued nothing. Rather than kill
+        # this trajectory (which would force a master restart), park it and poll
+        # OUTCAR until the operator manually resubmits. Safe: no job is queued, so
+        # a manual jobsub cannot double-submit, and the directory is already prepped.
         rm -f $submission_marker
-        echo "FATAL volsearch_cont: resubmission at startup failed. See $submission_log for the scheduler error."
-        touch $failure_marker
-        exit 1
+        echo "$nstep" > $await_marker
+        echo "WAITING volsearch_cont: scheduler rejected the startup resubmission for step $nstep. See $submission_log."
+        echo "  Recover WITHOUT restarting the master: cd `pwd`; $vaspcmd jobsub"
+        echo "  (this directory is already prepared — submit jobsub and nothing else)."
+        ( python "$sluschipath/../../utils/StatusLog.py" append --source volsearch_cont --event await --detail "$nstep" ) >& /dev/null
       endif
     endif
     # Record the submission (step + scheduler job ID) in the unified log for the
@@ -175,7 +185,7 @@ while ($stopflag == 0)
   if (! $?) then # Job is done
 
     echo ====== JOB $nstep DONE ======
-    rm -f $submission_marker
+    rm -f $submission_marker $await_marker
 
     grep -s "BRMIX: very serious problems" OUTCAR > /dev/null
     if ( $? == 0 ) then
@@ -642,6 +652,7 @@ while ($stopflag == 0)
       echo $nextstep > poscar_built_for_step
       echo $nextstep > $submission_marker
       rm -f $submission_log
+      @ await_flag = 0
       ( $vaspcmd jobsub ) >>& $submission_log
       set submit_status = $?
       cat $submission_log >> jobsub.log
@@ -650,10 +661,18 @@ while ($stopflag == 0)
         if ( $? == 0 ) then
           echo WARNING volsearch_cont: job submission timed out after Slurm may have accepted the job. Waiting for job $nextstep.
         else
+          # Scheduler rejected the submission and queued nothing. Park this
+          # trajectory and poll OUTCAR until the operator manually resubmits,
+          # instead of killing it and forcing a master restart. Safe: no job is
+          # queued, so a manual jobsub cannot double-submit, and the directory is
+          # already prepped (POSCAR/INCAR/jobsub in place, OUTCAR freshly empty).
           rm -f $submission_marker
-          echo FATAL volsearch_cont: job submission command failed. See $submission_log for the scheduler error.
-          touch $failure_marker
-          exit 1
+          echo "$nextstep" > $await_marker
+          echo "WAITING volsearch_cont: scheduler rejected submission for step $nextstep. See $submission_log."
+          echo "  Recover WITHOUT restarting the master: cd `pwd`; $vaspcmd jobsub"
+          echo "  (this directory is already prepared — submit jobsub and nothing else)."
+          ( python "$sluschipath/../../utils/StatusLog.py" append --source volsearch_cont --event await --detail "$nextstep" ) >& /dev/null
+          @ await_flag = 1
         endif
       endif
       set nstep = $nextstep
@@ -668,7 +687,11 @@ while ($stopflag == 0)
           ( python "$sluschipath/../../utils/StatusLog.py" append --source volsearch_cont --event submitted --detail "$nstep $_jobid" ) >& /dev/null
         endif
       endif
-      echo Job $nstep submitted. Waiting for job $nstep to finish...
+      if ( $await_flag == 0 ) then
+        echo Job $nstep submitted. Waiting for job $nstep to finish...
+      else
+        echo Step $nstep awaiting manual submission. Polling for OUTCAR until you resubmit jobsub...
+      endif
     endif
   endif
   endif

@@ -325,8 +325,8 @@ def WriteMarker(MarkerPath: Path, Content: str = "") -> None:
 
 
 def ParseJobId(Text: str) -> Optional[str]:
-    """Extract a scheduler job ID from submission output (Slurm or PBS).
-
+    """
+    Extract a scheduler job ID from submission output (Slurm or PBS).
     Slurm `sbatch` prints 'Submitted batch job 12345'; PBS `qsub` prints
     '12345.head' or '12345'. Returns None if no ID is found.
     """
@@ -363,7 +363,8 @@ def _MakeSigtermHandler(Procs: Dict[str, Tuple[subprocess.Popen, Path]]):
 
 
 def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, Path]]) -> int:
-    """Launch volsearch_cont in parallel for all pending simulation dirs.
+    """
+    Launch volsearch_cont in parallel for all pending simulation dirs.
 
     Runs on the compute node. Blocks until all processes finish.
     Appends started/exit/killed events to each Dir_VolSearch's sim_log.tsv (via
@@ -389,14 +390,14 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
     Env["sguschipath"] = str(VOLSEARCH_CONT.parent)
 
     for Label, Vsd in PendingDirs:
-        # Clear stale terminal markers from a previous attempt so
-        # SimulationSummary doesn't report the restarted sim as FAILED before
-        # volsearch_cont rewrites them at exit. (volsearch_cont also removes
-        # sguschi_failed at startup; clearing it here closes the brief window
-        # before that and keeps the restart cleanup consistent.) The append-only
-        # sim_log.tsv is not cleared — the 'started' event below delineates this
-        # run from any prior one, so stale terminal events never mask a restart.
-        for Stale in ("job.exit", "sguschi_failed"):
+        # Clear stale terminal/wait markers from a previous attempt so
+        # SimulationSummary doesn't report the restarted sim as FAILED or AWAITING
+        # before volsearch_cont rewrites them at exit. (volsearch_cont also removes
+        # these at startup; clearing them here closes the brief window before that
+        # and keeps the restart cleanup consistent.) The append-only sim_log.tsv is
+        # not cleared — the 'started' event below delineates this run from any prior
+        # one, so stale terminal events never mask a restart.
+        for Stale in ("job.exit", "sguschi_failed", "awaiting_manual_submission"):
             (Vsd / Stale).unlink(missing_ok=True)
         StatusLog.Append(Vsd, "SGUSCHI", "started", datetime.now().isoformat(timespec="seconds"))
         LogPath = Vsd.parent / "log.out"

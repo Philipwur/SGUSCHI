@@ -15,36 +15,31 @@ from typing import Dict, List, Tuple, Optional, Union, Set
 
 
 
-def CheckElementsInRadii(Position: pd.DataFrame, 
+def CheckElementsInRadii(Elements: np.ndarray,
                          CovalentRadii: Dict[str, float]
                          ) -> None:
     """
-    Validate that every element present in Position has a radius in CovalentRadii.
+    Validate that every element present has a radius in CovalentRadii.
     Raises a ValueError listing any missing symbols.
+    Elements: array/iterable of element symbols.
     """
-    ElementsInFrame = set(Position["Element"].unique().tolist())
-    ElementsInRadii = set(CovalentRadii.keys())
-    Missing = sorted(ElementsInFrame - ElementsInRadii)
+    Missing = sorted(set(Elements) - set(CovalentRadii))
     if Missing:
         raise ValueError(
             "CovalentRadii is missing entries for: {}".format(", ".join(Missing))
         )
 
 
-def MinimumDistancePBCVectorised(Position: pd.DataFrame, 
-                                 CellDim: Union[pd.DataFrame, np.ndarray]
+def MinimumDistancePBCVectorised(FracCoords: np.ndarray,
+                                 CellMat: np.ndarray
                                  ) -> np.ndarray:
     """
     Build NxN Cartesian distance matrix with minimum-image PBC.
-    Expects fractional coordinates in Position[['x','y','z']].
-    CellDim: 3x3 (Å) with lattice vectors as columns (standard VASP-style).
+    FracCoords: (N,3) fractional coordinates.
+    CellMat: 3x3 (Å) lattice matrix (Cartesian = fractional @ CellMat).
     """
-    if isinstance(CellDim, pd.DataFrame):
-        CellMat = CellDim.to_numpy()
-    else:
-        CellMat = np.asarray(CellDim)
-
-    FracCoords = Position[["x", "y", "z"]].to_numpy()
+    FracCoords = np.asarray(FracCoords)
+    CellMat    = np.asarray(CellMat)
 
     # Pairwise fractional displacements
     Displacement = FracCoords[:, np.newaxis, :] - FracCoords[np.newaxis, :, :]
@@ -205,14 +200,59 @@ def FindGases(
             A tuple of (ResultDataFrame, BondMatrix), where `BondMatrix` is an (N, N) boolean
             NumPy array indicating bonds (symmetric with a False diagonal).
     """
+    Elements   = Position["Element"].to_numpy()
+    FracCoords = Position[["x", "y", "z"]].to_numpy()
+    if isinstance(CellDim, pd.DataFrame):
+        CellMat = CellDim.to_numpy()
+    else:
+        CellMat = np.asarray(CellDim)
+
+    return FindGasesFromArrays(
+        Elements, FracCoords, CellMat,
+        CovalentRadii=CovalentRadii,
+        AtomicRadiusTol=AtomicRadiusTol,
+        MinimumComplexity=MinimumComplexity,
+        MaximumComplexity=MaximumComplexity,
+        ReturnBondMatrix=ReturnBondMatrix,
+    )
+
+
+def FindGasesFromArrays(
+    Elements: np.ndarray,
+    FracCoords: np.ndarray,
+    CellMat: np.ndarray,
+    CovalentRadii: Dict[str, float],
+    AtomicRadiusTol: float = 1.05,
+    MinimumComplexity: int = 2,
+    MaximumComplexity: int = 3,
+    ReturnBondMatrix: bool = False
+    ) -> Union[pd.DataFrame, Tuple[pd.DataFrame, np.ndarray]]:
+    """
+    Array-based core of `FindGases` — identical algorithm, no DataFrame overhead.
+
+    Use this directly in hot loops (e.g. per-frame trajectory postprocessing) to
+    avoid building a per-frame `Position` DataFrame. `FindGases` is a thin
+    DataFrame-accepting wrapper around this function.
+
+    Args:
+        Elements   : (N,) array/iterable of element symbols.
+        FracCoords : (N,3) fractional coordinates.
+        CellMat    : 3x3 lattice (Å); Cartesian = fractional @ CellMat.
+        (remaining args identical to `FindGases`.)
+
+    Returns:
+        Same as `FindGases`: a DataFrame with 'Molecule' and 'Indices' columns,
+        or (Result, BondMatrix) when `ReturnBondMatrix` is True.
+    """
+    Elements = np.asarray(Elements)
+
     # Step 0
-    CheckElementsInRadii(Position, CovalentRadii)
+    CheckElementsInRadii(Elements, CovalentRadii)
 
     # Step 1
-    CartDistanceMatrix = MinimumDistancePBCVectorised(Position, CellDim)
+    CartDistanceMatrix = MinimumDistancePBCVectorised(FracCoords, CellMat)
 
     # Step 2
-    Elements = Position["Element"].to_numpy()
     BondMatrix = BuildBondMatrixFromRadii(
         Elements=Elements,
         CartDistanceMatrix=CartDistanceMatrix,

@@ -18,7 +18,7 @@
 ## Postprocessing
 
 - Add Pressure method to postprocessing from DevArea.
-- Review and finish `src/postprocessing/workflow/` scripts (CalculatePartialPressure.py, CompareMethodsCumulative.py); currently work-in-progress and undocumented. Once stable, document the postprocessing workflow in README (inputs from RateAnalysis.csv, how/when to run, expected outputs) and add the `plotly`/`tqdm` usage there.
+- Review and finish `src/postprocessing/` scripts (CalculatePartialPressure.py, CompareMethodsCumulative.py); currently work-in-progress and undocumented. Once stable, document the postprocessing workflow in README (inputs from RateAnalysis.csv, how/when to run, expected outputs) and add the `plotly`/`tqdm` usage there.
 
 ## OxidationStep
 

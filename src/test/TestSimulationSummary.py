@@ -742,6 +742,57 @@ def TestStuckWhenOutcarFrozenPastThreshold(RootDir: Path) -> None:
     assert Row.Status == "STUCK"
 
 
+# --------------------------- Awaiting manual submission -----------------------
+
+
+def TestAwaitingMarkerWithEmptyOutcarProducesAwaiting(RootDir: Path) -> None:
+    """awaiting_manual_submission + empty OUTCAR -> AWAITING (alive, not failed)."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "OUTCAR").write_text("", encoding="utf-8")
+    (WorkDir / "awaiting_manual_submission").write_text("2\n", encoding="utf-8")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", ""),
+                         (None, "volsearch_cont", "await", "2")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "AWAITING"
+    assert Row.Done == "N"
+    assert Row.Failed == "N"
+    assert Row.Detail == "resubmit jobsub for step 2"
+
+
+def TestAwaitingClearsOnceManualJobWritesOutcar(RootDir: Path) -> None:
+    """Once the manual resubmit produces OUTCAR content, status flips off AWAITING.
+
+    The marker is only cleared by volsearch_cont at the next completed cycle, so
+    the summary keys off a non-empty OUTCAR to report progress immediately.
+    """
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "1").mkdir()
+    (WorkDir / "OUTCAR").write_text("running\n", encoding="utf-8")
+    (WorkDir / "awaiting_manual_submission").write_text("2\n", encoding="utf-8")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", "")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status != "AWAITING"
+
+
+def TestKilledOverridesAwaitingMarker(RootDir: Path) -> None:
+    """A walltime kill while parked is terminal: KILLED wins over the wait marker."""
+    WorkDir = MakeWorkDir(RootDir, "873_1")
+    (WorkDir / "OUTCAR").write_text("", encoding="utf-8")
+    (WorkDir / "awaiting_manual_submission").write_text("2\n", encoding="utf-8")
+    SeedSimLog(WorkDir, [(None, "SGUSCHI", "started", ""),
+                         (None, "SGUSCHI", "killed", "SIGTERM")])
+
+    Row = FindRow(Summary.BuildSummary(RootDir, LiveIds=None), "873_1")
+
+    assert Row.Status == "KILLED"
+    assert Row.Failed == "Y"
+
+
 def TestSchedulerNotQueriedForHealthySim(RootDir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The scheduler is consulted only when a sim is warranted (stale OUTCAR)."""
     Calls = {"n": 0}

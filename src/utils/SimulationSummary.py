@@ -613,6 +613,26 @@ def DetermineStatus(
             return "DONE", "Y", "N", "exit 0"
         return "FAILED", "N", "Y", "exit {}".format((Last.Detail or "").strip() or "?")
 
+    # 5b: operator-wait state. volsearch_cont's submission was rejected and it is
+    # polling for a manual jobsub resubmit (it writes 'awaiting_manual_submission';
+    # see volsearch_cont). The engine is still alive, so this is neither done nor
+    # failed — surface it so the operator can resubmit without restarting the
+    # master. Once the manual job starts writing OUTCAR, fall through to RUNNING
+    # even before the marker is cleared at the next completed cycle.
+    AwaitMarker = WorkDir / "awaiting_manual_submission"
+    if AwaitMarker.exists():
+        try:
+            OutcarEmpty = (WorkDir / "OUTCAR").stat().st_size == 0
+        except OSError:
+            OutcarEmpty = True
+        if OutcarEmpty:
+            try:
+                Step = AwaitMarker.read_text(encoding="utf-8").strip()
+            except OSError:
+                Step = ""
+            Detail = "resubmit jobsub for step {}".format(Step) if Step else "resubmit jobsub"
+            return "AWAITING", "N", "N", Detail
+
     # 6: scheduler-aware stuck — the current step's job is gone while its OUTCAR
     # has not completed. Only with a known job ID, past the submit grace, no
     # recent OUTCAR progress (the warrant gate), and a successful scheduler query.
