@@ -41,7 +41,7 @@
 
 ## SLUSCHI Source
 
-- Change .sluschi.rc / make so that there is a sluschipath2/sguschipath, then you can install both SLUSCHI and SGUSCHI without conflict. Make sure all references to sluschipath are changed to sluschipath2 or sguschipath.
+- [DONE] Co-installation with upstream SLUSCHI no longer conflicts. Every csh script in `SLUSCHI_mod` now resolves `sluschipath` env-var-first: `$sguschipath` (exported by `SGUSCHI.py`) takes precedence, falling back to `~/.sluschi.rc` only if unset. `SGUSCHI.py` sets `sguschipath` at runtime, so a pure SGUSCHI run never reads or writes `~/.sluschi.rc`. No separate `.sguschi.rc`/dotfile is created.
 
 ## PrepareWorkPlace
 

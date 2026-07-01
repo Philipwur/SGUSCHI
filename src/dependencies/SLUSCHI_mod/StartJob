@@ -1,6 +1,8 @@
 #!/bin/csh
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 
 @ temp_now = $1

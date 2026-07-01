@@ -4,7 +4,9 @@ echo \*\*\* This is the first simulation at this temperature. Volume search is r
 
 # in $temp_now/$temp_now/Dir_VolSearchCoex
 cp ../../../../job.in .
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 
 set temp = `grep TEEND INCAR | cut -d'=' -f2`

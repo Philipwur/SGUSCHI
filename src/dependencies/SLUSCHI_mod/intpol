@@ -2,7 +2,9 @@
 
 echo Interpolate melting point from elements...
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 
 # number of elements
 @ n_elmt = `grep TITEL POTCAR  | wc -l`

@@ -14,10 +14,15 @@ from tqdm import tqdm
 # Resolve the workflow package relative to this file so the script runs from any
 # working directory (it is launched from inside the data folder).
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "workflow"))
-from OxidationAnalysis import FindGasesFromArrays
+import OxidationAnalysis as an
+from pymatgen.optimization.neighbors import find_points_in_spheres
 
 # Gas volume is estimated with the Zr-distance gap method; the tag labels plots.
 VOLUME_TAG = "ZrDistance"
+
+# pymatgen's find_points_in_spheres wants `pbc` as C-long; np.int_ matches that
+# on every platform (int32 on Windows, int64 on Linux).
+_PBC = np.array([1, 1, 1], dtype=np.int_)
 
 
 @dataclass
@@ -159,23 +164,23 @@ def _IterXyzFrames(XyzFilePath: Path, Stride: int = 1):
 
 def _FrameO2Count(
     Lattice:         np.ndarray,
-    InvLattice:      np.ndarray,
     Elements:        list,
     CartArray:       np.ndarray,
     CovalentRadii:   dict,
     AtomicRadiusTol: float,
 ):
     """
-    O2 molecule count for a single already-parsed frame via FindGases.
+    O2 molecule count for a single already-parsed frame.
 
-    Bonding rules enforced by FindGases:
+    Uses pymatgen's `find_points_in_spheres` — a fast, general-cell (triclinic-
+    correct) PBC neighbour search — to get candidate close pairs, filters them by
+    the per-pair covalent cutoff, then reuses the exact bonding rules from
+    OxidationAnalysis:
       - Each O atom participates in at most one O-O bond (EnforceUniqueOOBonds),
         preventing fictitious O3/O4 clusters in the high-density gas phase.
       - Any O bonded to Zr joins the large slab connected component and is
-        excluded from gas-phase counting via the MaximumComplexity=2 filter.
-
-    Fractional coordinates are derived from the extended-XYZ row-vector lattice
-    convention: Cartesian = fractional @ Lattice.
+        excluded by counting only size-2 ('O','O') components (== FindGases with
+        MinimumComplexity = MaximumComplexity = 2).
 
     Returns the O2 count (int), or None if the frame contains elements absent
     from CovalentRadii.
@@ -183,15 +188,32 @@ def _FrameO2Count(
     if set(Elements) - set(CovalentRadii):
         return None
 
-    FracCoords = np.mod(CartArray @ InvLattice, 1.0)
-    Gases = FindGasesFromArrays(
-        np.asarray(Elements), FracCoords, Lattice,
-        CovalentRadii=CovalentRadii,
-        AtomicRadiusTol=AtomicRadiusTol,
-        MinimumComplexity=2,
-        MaximumComplexity=2,
+    Elements = np.asarray(Elements)
+    N        = len(Elements)
+    Radii    = np.array([CovalentRadii[e] for e in Elements], dtype=float)
+    MaxCut   = 2.0 * float(Radii.max()) * AtomicRadiusTol  # upper bound over all pairs
+
+    Cart = np.ascontiguousarray(CartArray, dtype=float)
+    Lat  = np.ascontiguousarray(Lattice, dtype=float)
+    I1, I2, _Off, Dist = find_points_in_spheres(Cart, Cart, MaxCut, _PBC, Lat)
+
+    # Distinct atom pairs within their specific covalent cutoff.
+    Keep = I1 != I2
+    Ii, Jj, Dd = I1[Keep], I2[Keep], Dist[Keep]
+    Bonded = Dd < (Radii[Ii] + Radii[Jj]) * AtomicRadiusTol
+    Bi, Bj, Bd = Ii[Bonded], Jj[Bonded], Dd[Bonded]
+
+    BondMatrix = np.zeros((N, N), dtype=bool)
+    BondMatrix[Bi, Bj] = True                  # both directions present in the pair list
+    DistMatrix = np.full((N, N), np.inf, dtype=float)
+    np.minimum.at(DistMatrix, (Bi, Bj), Bd)    # min over multiple periodic images
+
+    BondMatrix = an.EnforceUniqueOOBonds(BondMatrix, Elements, DistMatrix)
+    Components = an.FindConnectedSubcomponents(BondMatrix)
+    return sum(
+        1 for Comp in Components
+        if len(Comp) == 2 and tuple(sorted(Elements[k] for k in Comp)) == ('O', 'O')
     )
-    return int(sum(M == ('O', 'O') for M in Gases['Molecule']))
 
 
 def ParseTrajectory(XyzFilePath: Path, Stride: int = 1) -> tuple:
@@ -201,9 +223,9 @@ def ParseTrajectory(XyzFilePath: Path, Stride: int = 1) -> tuple:
     For each frame (every `Stride`) this records the gap-based effective gas
     volume (via _FrameVolumeZrDistance), the full cell volume, the
     cross-sectional area perpendicular to the a-axis (|b x c| — the surface the
-    gas impinges on), and the O2 molecule count (via FindGases). Volume and
-    count therefore share an identical time base, so no timeline alignment is
-    needed downstream.
+    gas impinges on), and the O2 molecule count (via pymatgen neighbour search).
+    Volume and count therefore share an identical time base, so no timeline
+    alignment is needed downstream.
 
     Returns (FrameData, Warnings):
         FrameData : DataFrame with columns
@@ -226,7 +248,7 @@ def ParseTrajectory(XyzFilePath: Path, Stride: int = 1) -> tuple:
         EffVolM3, CellVolM3 = _FrameVolumeZrDistance(Lattice, InvLattice, Elements, CartArray)
         AreaM2 = np.linalg.norm(np.cross(Lattice[1], Lattice[2])) * 1e-20
 
-        O2Count = _FrameO2Count(Lattice, InvLattice, Elements, CartArray, CovalentRadii, AtomicRadiusTol)
+        O2Count = _FrameO2Count(Lattice, Elements, CartArray, CovalentRadii, AtomicRadiusTol)
         if O2Count is None:
             Warnings.append(f"  [WARNING] Unknown elements {set(Elements) - set(CovalentRadii)} "
                             f"at {TimeFs} fs — skipping O2 count.")

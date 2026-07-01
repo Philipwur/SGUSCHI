@@ -10,7 +10,9 @@
 #rm POTCAR2
 #if ( -e ../KPOINTS_gamma ) cp ../KPOINTS_gamma KPOINTS
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 
 # determine vasp5 or vasp4. vasp5 has one more line, which specifies elements

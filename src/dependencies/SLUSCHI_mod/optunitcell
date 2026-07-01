@@ -5,7 +5,9 @@ cp INCAR POSCAR POTCAR jobsub job.in Dir_OptUnitCell
 cp KPOINTS_OPT Dir_OptUnitCell/KPOINTS
 cd Dir_OptUnitCell
 
-set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2`
+set sluschipath = ""
+if ( $?sguschipath ) set sluschipath = "$sguschipath"
+if ( "$sluschipath" == "" ) set sluschipath = `grep sluschipath ~/.sluschi.rc | cut -d'=' -f2 | tr -d '\r'`
 set vaspcmd = `getinfo.csh vaspcmd job.in`
 set pstress = `getinfo.csh press job.in`
 
