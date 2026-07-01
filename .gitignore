@@ -1,8 +1,6 @@
 src/test/873_1
 src/**/__pycache__
 src/DevArea
-.vscode
-.pytest_cache
 CLAUDE.md
 .*
 debug.log
