@@ -10,7 +10,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from utils.FixXYZ import FixXYZ
 from utils.FixRateAnalysis import FixRateAnalysis
-from utils.FolderUtils import NumericStepFolders
+from utils.FolderUtils import NumericStepFolders, ResumeSeamStep
 
 '''
 -------------------------------------------------------------------------------
@@ -43,13 +43,32 @@ between folder n and n+1.
 -------------------------------------------------------------------------------
 '''
 
-def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) -> None:
-    
+def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0,
+                       ForceAcrossSeam: bool = False) -> None:
+
     if WorkDir is None:
         WorkDir = os.getcwd()
-        
+
     WorkDir = Path(WorkDir).resolve()
-    
+
+    # 0. Resume-seam guard. In a workspace rebuilt by ResumeFromTrajectory, folders
+    #    1..N are empty placeholders with no per-step POSCAR/OUTCAR. Rollback both
+    #    reads {TargetStep+1}/POSCAR and rebuilds XYZ/RateAnalysis from folder
+    #    contents (via FixXYZ/FixRateAnalysis), neither of which is possible across
+    #    the seam. Refuse rather than corrupt the carried-forward history.
+    SeamStep = ResumeSeamStep(WorkDir)
+    if SeamStep is not None and not ForceAcrossSeam:
+        print(
+            f"\nError: {WorkDir} was resumed from trajectory at step {SeamStep} "
+            f"(.resume_seam present).\nFolders 1..{SeamStep} are empty placeholders, "
+            "so rollback cannot rebuild a consistent XYZ/RateAnalysis (the repair step "
+            "needs per-folder OUTCAR/POSCAR that no longer exist).\n"
+            f"You can only roll back within steps produced after the resume (> {SeamStep}), "
+            "and only if those folders and their repair inputs are intact — pass "
+            "--force-across-seam to attempt it.\n"
+        )
+        sys.exit(1)
+
     # 1. Validate Target Folder
     TargetFolder = WorkDir / str(TargetStep)
     if not TargetFolder.exists():
@@ -108,10 +127,10 @@ def RollbackTrajectory(WorkDir: Union[str, Path] = None, TargetStep: int = 0) ->
 
     # 6. Repair Data Files
     print("Running FixXYZ...")
-    FixXYZ(WorkDir)
-    
+    FixXYZ(WorkDir, ForceAcrossSeam=ForceAcrossSeam)
+
     print("Running FixRateAnalysis...")
-    FixRateAnalysis(WorkDir)
+    FixRateAnalysis(WorkDir, ForceAcrossSeam=ForceAcrossSeam)
 
     print("Rollback complete.")
 
@@ -120,10 +139,12 @@ if __name__ == "__main__":
     
     # Argument Parsing Logic
     Args = sys.argv[1:]
-    
+    ForceSeam = "--force-across-seam" in Args
+    Args = [A for A in Args if A != "--force-across-seam"]
+
     WorkDirArg = None
     TargetStepArg = None
-    
+
     if len(Args) == 1:
         # Case: python RollbackTrajectory.py 200
         if Args[0].isdigit():
@@ -142,8 +163,8 @@ if __name__ == "__main__":
             print("Error: Second argument must be the Target Step integer.")
             sys.exit(1)
     else:
-        print("Usage: python RollbackTrajectory.py [Optional: WorkDir] [TargetStep]")
+        print("Usage: python RollbackTrajectory.py [Optional: WorkDir] [TargetStep] [--force-across-seam]")
         sys.exit(1)
-        
+
     # Execute
-    RollbackTrajectory(WorkDirArg, TargetStepArg)
+    RollbackTrajectory(WorkDirArg, TargetStepArg, ForceAcrossSeam=ForceSeam)

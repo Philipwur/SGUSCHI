@@ -11,7 +11,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
-from utils.FolderUtils import NumericStepFolders, TrajectoryRoot
+from utils.FolderUtils import NumericStepFolders, TrajectoryRoot, ResumeSeamStep
 
 
 '''
@@ -32,7 +32,7 @@ tqdm functionality is optional, other imports arent.
 '''
 
 
-def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
+def FixXYZ(WorkDir: Union[str, Path] = None, ForceAcrossSeam: bool = False) -> Path:
     """
     Rebuild the trajectory XYZ file for a Dir_VolSearch-like working directory.
 
@@ -53,6 +53,19 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
         WorkDir = os.getcwd()
 
     WorkDir = Path(WorkDir).resolve()
+
+    SeamStep = ResumeSeamStep(WorkDir)
+    if SeamStep is not None and not ForceAcrossSeam:
+        print(
+            f"\nError: {WorkDir} was resumed from trajectory at step {SeamStep} "
+            f"(.resume_seam present).\nFolders 1..{SeamStep} are empty placeholders "
+            "without OUTCAR/POSCAR, so a full-history XYZ rebuild is not possible and "
+            f"would discard the carried-forward trajectory.\nRe-run with "
+            "--force-across-seam only if you understand the data covering steps "
+            f"1..{SeamStep} cannot be reconstructed.\n"
+        )
+        sys.exit(1)
+
     RootDir, TrajectoryName = TrajectoryRoot(WorkDir)
 
     XYZDir = RootDir / "xyz_files"
@@ -104,10 +117,10 @@ def FixXYZ(WorkDir: Union[str, Path] = None) -> Path:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        WorkDirArgument = sys.argv[1]
-    else:
-        WorkDirArgument = os.getcwd()
+    Args = [A for A in sys.argv[1:]]
+    ForceSeam = "--force-across-seam" in Args
+    Args = [A for A in Args if A != "--force-across-seam"]
+    WorkDirArgument = Args[0] if Args else os.getcwd()
 
-    XYZFilePath = FixXYZ(WorkDirArgument)
+    XYZFilePath = FixXYZ(WorkDirArgument, ForceAcrossSeam=ForceSeam)
     print(f"Rebuilt XYZ file at: {XYZFilePath}")

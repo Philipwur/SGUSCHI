@@ -13,7 +13,7 @@ except ImportError:
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
-from utils.FolderUtils import NumericStepFolders, TrajectoryRoot
+from utils.FolderUtils import NumericStepFolders, TrajectoryRoot, ResumeSeamStep
 from workflow import OxidationAnalysis as an
 from workflow.OxidationStep import ExponentialSmoothing, CreateGassesRemovedStr
 
@@ -38,7 +38,8 @@ This script drops the final row of rateanalysis so that oxidation step can work
 '''
 
 
-def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
+def FixRateAnalysis(WorkDir: Union[str, Path] = None,
+                    ForceAcrossSeam: bool = False) -> pd.DataFrame:
     """
     Rebuild RateAnalysis for a Dir_VolSearch-like working directory.
 
@@ -56,6 +57,19 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
         WorkDir = os.getcwd()
 
     WorkDir = Path(WorkDir).resolve()
+
+    SeamStep = ResumeSeamStep(WorkDir)
+    if SeamStep is not None and not ForceAcrossSeam:
+        print(
+            f"\nError: {WorkDir} was resumed from trajectory at step {SeamStep} "
+            f"(.resume_seam present).\nFolders 1..{SeamStep} are empty placeholders "
+            "without OUTCAR/POSCAR, so RateAnalysis cannot be rebuilt from folder "
+            "contents and doing so would discard the carried-forward history.\n"
+            "Re-run with --force-across-seam only if you understand steps "
+            f"1..{SeamStep} cannot be reconstructed.\n"
+        )
+        sys.exit(1)
+
     RootDir, TrajectoryName = TrajectoryRoot(WorkDir)
 
     # ------------------------ Read hyperparameters ------------------------
@@ -290,9 +304,9 @@ def FixRateAnalysis(WorkDir: Union[str, Path] = None) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        WorkDirArgument = sys.argv[1]
-    else:
-        WorkDirArgument = os.getcwd()
+    Args = list(sys.argv[1:])
+    ForceSeam = "--force-across-seam" in Args
+    Args = [A for A in Args if A != "--force-across-seam"]
+    WorkDirArgument = Args[0] if Args else os.getcwd()
 
-    FixRateAnalysis(WorkDirArgument)
+    FixRateAnalysis(WorkDirArgument, ForceAcrossSeam=ForceSeam)
