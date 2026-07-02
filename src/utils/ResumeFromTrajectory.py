@@ -603,14 +603,24 @@ def _CopyFileSafe(Src: Path, Dst: Path) -> None:
     _CopyFile(Src, Dst)
 
 
-def EnsureCleanSubmissionState(VolSearchDir: Path) -> None:
-    """Clear stale run-state and the root OUTCAR so recovery resubmits step N+1."""
+def EnsureCleanSubmissionState(VolSearchDir: Path, NextStep: int) -> None:
+    """Clear stale run-state and the root OUTCAR so recovery submits step NextStep.
+
+    Also records ``poscar_built_for_step = NextStep`` (= N+1). volsearch_cont's startup
+    recovery reads this to decide whether it must rebuild POSCAR from CONTCAR; since the
+    reconstructed POSCAR IS the intended geometry for the first continuation step, this
+    makes recovery skip that branch — suppressing the misleading "no CONTCAR ... deleted
+    WAVECAR" warning (and the no-op WAVECAR deletion) — while still submitting our POSCAR
+    as step NextStep. It does not affect the double-submission guard (`.vasp_submitted_step`).
+    """
     for FN in STALE_RUN_STATE:
         (VolSearchDir / FN).unlink(missing_ok=True)
     (VolSearchDir / "OUTCAR").unlink(missing_ok=True)
     Pulay = VolSearchDir / "Dir_Pressure_Pulay"
     if Pulay.is_dir():
         shutil.rmtree(Pulay)
+    # Written AFTER the STALE_RUN_STATE sweep (which removes any old value).
+    (VolSearchDir / "poscar_built_for_step").write_text(str(NextStep), encoding="utf-8")
 
 
 def WriteResumeSeamMarker(VolSearchDir: Path, N: int) -> None:
@@ -673,7 +683,7 @@ def ResumeTrajectory(TrajName: str, XyzPath: Path, RatePath: Path, TargetRoot: P
     VolSearchDir = BuildWorkspaceTree(TargetRoot, TrajName, InputsDir, Force=Force)
     SeedPlaceholderFolders(VolSearchDir, N)
     PlaceCarriedState(VolSearchDir, TargetRoot, TrajName, LastFrameData, RatePath, XyzPath)
-    EnsureCleanSubmissionState(VolSearchDir)
+    EnsureCleanSubmissionState(VolSearchDir, NextStep=N + 1)
     WriteResumeSeamMarker(VolSearchDir, N)
 
     # Post-build invariant: len(RateAnalysis) == placeholder folders + 1 == N + 1.

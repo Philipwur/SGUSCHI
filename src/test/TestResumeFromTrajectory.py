@@ -314,6 +314,8 @@ def TestResumeTrajectoryBuildsConsistentWorkspace(tmp_path: Path) -> None:
     # Clean submission state so volsearch_cont recovery resubmits.
     assert not (Vsd / "OUTCAR").exists()
     assert not (Vsd / ".vasp_submitted_step").exists()
+    # poscar_built_for_step = N+1 so recovery skips the CONTCAR-rebuild warning.
+    assert (Vsd / "poscar_built_for_step").read_text().strip() == "4"
 
     # Carried-forward outputs present; seam marker records N.
     assert (Target / "xyz_files" / "1273_3.xyz").exists()
