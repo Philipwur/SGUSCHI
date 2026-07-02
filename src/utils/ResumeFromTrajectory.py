@@ -23,8 +23,27 @@ step ``N+1``. This utility only prepares the workspace; resume with the normal
 ``sbatch OxidationMaster``.
 
 Usage:
-    python src/utils/ResumeFromTrajectory.py --target WORKDIR --inputs INPUTS_DIR \
-        [--xyz-dir DIR] [--only 1273_3,873_1] [--force] [--dry-run]
+    The simplest way is to ``cd`` into the workspace and run with no path arguments —
+    the paths are inferred from the current directory (always dry-run first):
+
+        cd /path/to/workspace                 # the folder containing xyz_files/
+        python /path/to/SGUSCHI/src/utils/ResumeFromTrajectory.py --dry-run
+        python /path/to/SGUSCHI/src/utils/ResumeFromTrajectory.py   # actually build
+
+    You may instead ``cd`` into the ``xyz_files/`` folder itself; the parent workspace
+    is then used for inputs and as the rebuild target. Inference rules:
+      * cwd contains ``xyz_files/``  -> cwd is the workspace root (inputs + target)
+      * cwd holds the ``*.xyz`` files -> cwd is xyz_files/, its parent is the root
+      * neither                       -> pass --target and --inputs explicitly
+
+    Any path can be overridden explicitly (e.g. inputs kept elsewhere):
+
+        python .../ResumeFromTrajectory.py --target WORKDIR --inputs INPUTS_DIR \
+            [--xyz-dir DIR] [--only 1273_3,873_1] [--force] [--no-summary] [--dry-run]
+
+    --inputs must hold: POTCAR OxParams CovalentRadii INCAR KPOINTS job.in jobsub.
+    By default every {Temp}_{Sim}.xyz found is rebuilt; --only narrows the set.
+    This utility only prepares the workspace — resume with ``sbatch OxidationMaster``.
 
 Accepted caveats (physically minor, self-healing):
     * The reconstructed POSCAR is the raw last xyz frame, so it omits the single gas
@@ -630,16 +649,57 @@ def WriteStarterSummary(TargetRoot: Path) -> None:
 # CLI
 # ---------------------------------------------------------------------------
 
+def InferLayout(Cwd: Path) -> Optional[Tuple[Path, Path, Path]]:
+    """Infer (TargetRoot, InputsDir, XyzDir) from the current directory.
+
+    Two supported layouts (so you can just ``cd`` and run):
+      * Inside an ``xyz_files/`` folder (cwd holds *.xyz)     -> base = cwd.parent
+      * In the workspace root that contains ``xyz_files/``    -> base = cwd
+    In both cases the base workspace supplies the inputs and receives the rebuilt
+    {Temp}_{Sim} folders. Returns None if neither layout matches.
+    """
+    Cwd = Path(Cwd).resolve()
+    if Cwd.name == "xyz_files" or any(Cwd.glob("*.xyz")):
+        Base = Cwd.parent
+        return Base, Base, Cwd
+    if (Cwd / "xyz_files").is_dir():
+        return Cwd, Cwd, Cwd / "xyz_files"
+    return None
+
+
+def ResolvePaths(Args: argparse.Namespace) -> Optional[Tuple[Path, Path, Path]]:
+    """Resolve (TargetRoot, InputsDir, XyzDir) from CLI args, filling gaps by inference."""
+    Inferred = InferLayout(Path.cwd())
+
+    TargetRoot = Path(Args.target).resolve() if Args.target else (Inferred[0] if Inferred else None)
+    InputsDir = Path(Args.inputs).resolve() if Args.inputs else (Inferred[1] if Inferred else None)
+    if Args.xyz_dir:
+        XyzDir = Path(Args.xyz_dir).resolve()
+    elif Inferred:
+        XyzDir = Inferred[2]
+    elif TargetRoot:
+        XyzDir = TargetRoot / "xyz_files"
+    else:
+        XyzDir = None
+
+    if TargetRoot is None or InputsDir is None or XyzDir is None:
+        return None
+    return TargetRoot, InputsDir, XyzDir
+
+
 def ParseArgs(Argv: Optional[List[str]] = None) -> argparse.Namespace:
     Parser = argparse.ArgumentParser(
         description="Rebuild a runnable workspace to continue simulations from xyz_files output."
     )
-    Parser.add_argument("--target", required=True,
-                        help="RootDir to build {Temp}_{Sim}/Dir_VolSearch under.")
-    Parser.add_argument("--inputs", required=True,
-                        help="Directory with POTCAR OxParams CovalentRadii INCAR KPOINTS job.in jobsub.")
+    Parser.add_argument("--target", default=None,
+                        help="RootDir to build {Temp}_{Sim}/Dir_VolSearch under "
+                             "(default: inferred from the current directory).")
+    Parser.add_argument("--inputs", default=None,
+                        help="Directory with POTCAR OxParams CovalentRadii INCAR KPOINTS "
+                             "job.in jobsub (default: the inferred workspace root).")
     Parser.add_argument("--xyz-dir", default=None,
-                        help="Source xyz_files/ directory (default: <target>/xyz_files).")
+                        help="Source xyz_files/ directory (default: <target>/xyz_files, "
+                             "or the current directory if it holds the .xyz files).")
     Parser.add_argument("--only", default=None,
                         help="Comma-separated trajectory names to restrict to (default: all).")
     Parser.add_argument("--force", action="store_true",
@@ -660,9 +720,15 @@ def main(Argv: Optional[List[str]] = None) -> int:
                 pass
 
     Args = ParseArgs(Argv)
-    TargetRoot = Path(Args.target).resolve()
-    InputsDir = Path(Args.inputs).resolve()
-    XyzDir = Path(Args.xyz_dir).resolve() if Args.xyz_dir else TargetRoot / "xyz_files"
+    Resolved = ResolvePaths(Args)
+    if Resolved is None:
+        print(
+            "ERROR: could not infer paths from the current directory.\n"
+            "Either cd into the workspace root (which contains xyz_files/) or into the "
+            "xyz_files/ folder itself, or pass --target and --inputs explicitly."
+        )
+        return 1
+    TargetRoot, InputsDir, XyzDir = Resolved
 
     if not InputsDir.is_dir():
         print(f"ERROR: inputs directory not found: {InputsDir}")
@@ -684,7 +750,9 @@ def main(Argv: Optional[List[str]] = None) -> int:
         return 1
 
     Mode = "DRY-RUN" if Args.dry_run else "PREPARE"
-    print(f"ResumeFromTrajectory [{Mode}] — target={TargetRoot}")
+    print(f"ResumeFromTrajectory [{Mode}]")
+    print(f"  target={TargetRoot}")
+    print(f"  inputs={InputsDir}")
     print(f"  {len(Trajectories)} trajectory(ies) from {XyzDir}")
 
     Failures = 0

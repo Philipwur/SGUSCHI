@@ -288,6 +288,27 @@ def TestResumeDryRunWritesNothing(tmp_path: Path) -> None:
     assert not (Target / "1273_3").exists()
 
 
+def TestInferLayoutFromWorkspaceRoot(tmp_path: Path) -> None:
+    (tmp_path / "xyz_files").mkdir()
+    Target, Inputs, XyzDir = Rft.InferLayout(tmp_path)
+    assert Target == tmp_path.resolve()
+    assert Inputs == tmp_path.resolve()
+    assert XyzDir == (tmp_path / "xyz_files").resolve()
+
+
+def TestInferLayoutFromInsideXyzFiles(tmp_path: Path) -> None:
+    XyzFiles = tmp_path / "xyz_files"
+    XyzFiles.mkdir()
+    (XyzFiles / "1273_3.xyz").write_text("0\n\n", encoding="utf-8")
+    Target, Inputs, XyzDir = Rft.InferLayout(XyzFiles)
+    assert Target == tmp_path.resolve()
+    assert XyzDir == XyzFiles.resolve()
+
+
+def TestInferLayoutUnrelatedDirReturnsNone(tmp_path: Path) -> None:
+    assert Rft.InferLayout(tmp_path) is None
+
+
 def TestStarterSummaryWritten(tmp_path: Path) -> None:
     XyzDir, Inputs = MakeSource(tmp_path, N=2)
     Target = tmp_path / "workspace"
