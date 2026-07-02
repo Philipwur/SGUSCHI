@@ -429,7 +429,12 @@ def _UpdateJobName(JobContent: str, FolderTag: str) -> str:
 
 
 def _CopyFile(Src: Path, Dst: Path) -> None:
+    """Copy Src -> Dst, skipping when they are the same file (in-place resume: the
+    root inputs like OxParams/CovalentRadii already live at the target root)."""
+    Src, Dst = Path(Src), Path(Dst)
     Dst.parent.mkdir(parents=True, exist_ok=True)
+    if Dst.exists() and Src.resolve() == Dst.resolve():
+        return
     shutil.copy2(Src, Dst)
 
 
@@ -594,12 +599,8 @@ def PlaceCarriedState(VolSearchDir: Path, TargetRoot: Path, TrajName: str,
 
 
 def _CopyFileSafe(Src: Path, Dst: Path) -> None:
-    """Copy Src -> Dst, skipping when they are the same file (in-place resume)."""
-    Src, Dst = Path(Src), Path(Dst)
-    Dst.parent.mkdir(parents=True, exist_ok=True)
-    if Dst.exists() and Src.resolve() == Dst.resolve():
-        return
-    shutil.copy2(Src, Dst)
+    """Alias for _CopyFile (same-file-safe); named for clarity at carry-state sites."""
+    _CopyFile(Src, Dst)
 
 
 def EnsureCleanSubmissionState(VolSearchDir: Path) -> None:

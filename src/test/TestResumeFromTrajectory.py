@@ -391,6 +391,35 @@ def TestResumeOFirstDatasetWithMatchingPotcar(tmp_path: Path) -> None:
     assert list(dict.fromkeys(Position["Element"])) == ["O", "Zr", "C"]
 
 
+def TestResumeInPlace(tmp_path: Path) -> None:
+    """In-place resume (target == inputs == parent of xyz_files): root inputs already
+    sit at the target, so copying OxParams/CovalentRadii onto themselves must be a
+    no-op, not a SameFileError."""
+    Base = tmp_path / "ZrC_10"
+    Base.mkdir()
+    # Root inputs live directly in the workspace root.
+    Inputs = BuildInputsDir(tmp_path)
+    for FN in ["POTCAR", "KPOINTS", "INCAR", "job.in", "jobsub", "OxParams", "CovalentRadii"]:
+        (Base / FN).write_bytes((Inputs / FN).read_bytes())
+    # Trajectory output already in Base/xyz_files.
+    XyzDir = Base / "xyz_files"
+    XyzDir.mkdir()
+    Frames = [(f'Lattice="{CUBIC_12}" Properties=species:S:1:pos:R:3 Step={I} Time={I}.0',
+               SimpleAtoms(0.0)) for I in range(1, 2 * Rft.MD_STEPS_PER_CYCLE + 1)]
+    WriteXYZFile(XyzDir / "1273_3.xyz", Frames)
+    MakeRateAnalysis(3).to_csv(XyzDir / "RateAnalysis_1273_3.csv", index=False)
+
+    Summary = Rft.ResumeTrajectory("1273_3", XyzDir / "1273_3.xyz",
+                                   XyzDir / "RateAnalysis_1273_3.csv",
+                                   Base, Base)  # target == inputs == Base
+    assert Summary["action"] == "prepared"
+    Vsd = Base / "1273_3" / "Dir_VolSearch"
+    assert NumericStepFolders(Vsd) == [1, 2]
+    assert (Base / "OxParams").exists()  # untouched, still present
+    # Carried xyz stayed in place (copied onto itself → no-op, not lost).
+    assert (XyzDir / "1273_3.xyz").exists()
+
+
 def TestResumeDryRunWritesNothing(tmp_path: Path) -> None:
     XyzDir, Inputs = MakeSource(tmp_path, N=2)
     Target = tmp_path / "workspace"
