@@ -581,8 +581,17 @@ def PlaceO2Molecules(Positions: pd.DataFrame,
     # Convert to DataFrame
     NewAtomsDF = pd.DataFrame(NewAtoms, columns=['Element','x','y','z'])
 
-    # Combine with existing positions
-    UpdatedPositions = pd.concat([Positions, NewAtomsDF], ignore_index=True)
+    # Insert the new O atoms immediately after the last existing O row rather than at
+    # the absolute end. This keeps the O atoms contiguous (so the written POSCAR matches
+    # the POTCAR without relying on WritePoscar's regrouping) and mirrors
+    # InsertNewVelocities, so Position and Velocity stay row-aligned. Falls back to
+    # appending at the end when no O atoms are present yet (e.g. initial preprocessing).
+    OMask = (Positions['Element'].values == 'O')
+    InsertPos = int(np.where(OMask)[0].max()) + 1 if OMask.any() else len(Positions)
+    UpdatedPositions = pd.concat(
+        [Positions.iloc[:InsertPos], NewAtomsDF, Positions.iloc[InsertPos:]],
+        ignore_index=True,
+    )
 
     return UpdatedPositions
 

@@ -296,31 +296,77 @@ def ParsePotcarElements(PotcarPath: Path) -> List[str]:
     return Elements
 
 
-def ValidatePotcarOrder(SpeciesOrder: List[str], PotcarPath: Path) -> None:
-    """Fail loudly if the reconstructed POSCAR species order != POTCAR order (O last).
+def ReorderPositionToPotcar(Position: pd.DataFrame, PotcarOrder: List[str]) -> pd.DataFrame:
+    """Return Position with rows regrouped so species follow the POTCAR element order.
 
-    Hard Constraint: a silent mismatch corrupts every subsequent VASP run. If the
-    POTCAR carries no parseable TITEL lines (e.g. the placeholder example POTCAR),
-    only the 'O last' rule is enforced, with a warning.
+    VASP maps POTCAR blocks to POSCAR species groups positionally, so the POSCAR
+    species order must equal the POTCAR order. xyz frames store bare element symbols
+    (Zr, O, C); POTCAR TITEL lines may carry suffixes (Zr_sv, O_pv) which
+    ParsePotcarElements already strips to bare symbols, so the comparison is on bare
+    symbols. Within each species the original relative order is preserved (stable sort;
+    keeps appended-O ordering intact). Raises if the frame has an element that has no
+    matching POTCAR block (it could not be assigned a pseudopotential).
     """
-    if SpeciesOrder and SpeciesOrder[-1] != "O":
+    FrameElements = list(dict.fromkeys(Position["Element"]))
+    Unknown = [El for El in FrameElements if El not in PotcarOrder]
+    if Unknown:
         raise ValueError(
-            f"Reconstructed POSCAR species order {SpeciesOrder} does not end in 'O'. "
-            "SGUSCHI requires oxygen last (POTCAR order + O last)."
+            f"Final frame contains element(s) {Unknown} with no matching POTCAR block "
+            f"(POTCAR order {PotcarOrder}). Cannot order the POSCAR to the POTCAR."
         )
+    Rank = {El: Index for Index, El in enumerate(PotcarOrder)}
+    Ordered = Position.copy()
+    Ordered["_Rank"] = Ordered["Element"].map(Rank)
+    Ordered = (
+        Ordered.sort_values("_Rank", kind="stable")
+        .drop(columns="_Rank")
+        .reset_index(drop=True)
+    )
+    return Ordered
+
+
+def ValidatePotcarOrder(SpeciesOrder: List[str], PotcarPath: Path) -> None:
+    """Validate the (already POTCAR-ordered) POSCAR species order against the POTCAR.
+
+    The real hard requirement is POSCAR species order == POTCAR species order — VASP
+    maps POTCAR blocks to POSCAR groups positionally, so a mismatch corrupts the run.
+    Called AFTER ReorderPositionToPotcar, so this confirms consistency and flags a
+    POTCAR that lists species absent from the frame. 'O last' is a preprocessing
+    convention, NOT a runtime requirement (the O2 add/remove + velocity-insertion paths
+    are order-agnostic), so an O-first ordering is allowed with only an informational
+    note. If the POTCAR carries no parseable TITEL lines (e.g. the placeholder example
+    POTCAR), consistency cannot be checked and a warning is printed.
+    """
     PotcarOrder = ParsePotcarElements(PotcarPath)
     if not PotcarOrder:
         print(
-            f"WARNING: no TITEL lines found in {PotcarPath}; cannot verify species "
-            "order against POTCAR. Ensure POTCAR matches the reconstructed POSCAR "
-            f"order {SpeciesOrder} (O last)."
+            f"WARNING: no TITEL lines found in {PotcarPath}; cannot order/verify species "
+            f"against POTCAR. Ensure POTCAR matches the reconstructed POSCAR order "
+            f"{SpeciesOrder}."
         )
         return
-    if PotcarOrder != SpeciesOrder:
+
+    # After reordering, the present species must appear in POTCAR order (VASP correctness).
+    PresentInPotcarOrder = [El for El in PotcarOrder if El in SpeciesOrder]
+    if PresentInPotcarOrder != SpeciesOrder:
         raise ValueError(
-            f"POTCAR element order {PotcarOrder} does not match the reconstructed "
-            f"POSCAR species order {SpeciesOrder}. Fix POTCAR ordering (must match "
-            "POSCAR species order, with O last) before resuming."
+            f"Reconstructed POSCAR species order {SpeciesOrder} is not consistent with "
+            f"POTCAR order {PotcarOrder}."
+        )
+
+    Absent = [El for El in PotcarOrder if El not in SpeciesOrder]
+    if Absent:
+        print(
+            f"WARNING: POTCAR lists {Absent} but the final frame contains none of these "
+            f"element(s). VASP will fail unless POTCAR is trimmed to match the POSCAR "
+            f"species {SpeciesOrder}."
+        )
+
+    if PotcarOrder[-1] != "O":
+        print(
+            f"NOTE: POTCAR order {PotcarOrder} does not end in 'O' (SGUSCHI's usual "
+            "convention is oxygen last). Proceeding — the POSCAR is written to match "
+            "the POTCAR, which is what VASP requires."
         )
 
 
@@ -585,6 +631,24 @@ def ResumeTrajectory(TrajName: str, XyzPath: Path, RatePath: Path, TargetRoot: P
     # --- Validation gates (cheap; run even in dry-run) ---
     N = DetermineN(RatePath, XyzPath, Force=Force)
     LastFrameData = ParseLastXYZFrame(XyzPath)
+
+    # Order the reconstructed POSCAR to the POTCAR element order (bare symbols, so
+    # Zr_sv/O_pv-style suffixes are handled by ParsePotcarElements). Skips reordering
+    # only when the POTCAR carries no TITEL lines (placeholder POTCAR).
+    PotcarOrder = ParsePotcarElements(InputsDir / "POTCAR")
+    OriginalElements = list(LastFrameData.PositionFrac["Element"])
+    if PotcarOrder:
+        LastFrameData.PositionFrac = ReorderPositionToPotcar(
+            LastFrameData.PositionFrac, PotcarOrder
+        )
+        if list(LastFrameData.PositionFrac["Element"]) != OriginalElements:
+            print(
+                f"  [{TrajName}] NOTE: atom order changed to match POTCAR "
+                f"{PotcarOrder}. The continuing xyz will use this order — a one-time "
+                "permutation at the restart seam. This is safe for SGUSCHI's per-frame "
+                "analysis (gas detection, void tracking) but would affect any across-"
+                "seam per-atom tracking (e.g. MSD)."
+            )
     SpeciesOrder = list(dict.fromkeys(LastFrameData.PositionFrac["Element"]))
     ValidatePotcarOrder(SpeciesOrder, InputsDir / "POTCAR")
     CheckStopCondition(InputsDir / "job.in", N)

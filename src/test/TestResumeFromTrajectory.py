@@ -181,18 +181,73 @@ def TestValidatePotcarOrderPass(tmp_path: Path) -> None:
     Rft.ValidatePotcarOrder(["Zr", "C", "O"], Potcar)  # no raise
 
 
-def TestValidatePotcarOrderRejectsONotLast(tmp_path: Path) -> None:
+def TestValidatePotcarOrderAllowsONotLastWithNote(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """O-last is a convention, not a runtime requirement: an O-first/mid POTCAR that
+    matches the POSCAR order is allowed, with only an informational NOTE."""
     Potcar = tmp_path / "POTCAR"
-    WritePotcar(Potcar, ["Zr", "O", "C"])
-    with pytest.raises(ValueError, match="end in 'O'"):
-        Rft.ValidatePotcarOrder(["Zr", "O", "C"], Potcar)
+    WritePotcar(Potcar, ["O", "Zr", "C"])
+    Rft.ValidatePotcarOrder(["O", "Zr", "C"], Potcar)  # no raise
+    assert "does not end in 'O'" in capsys.readouterr().out
 
 
-def TestValidatePotcarOrderRejectsMismatch(tmp_path: Path) -> None:
+def TestValidatePotcarOrderRejectsInconsistentOrder(tmp_path: Path) -> None:
     Potcar = tmp_path / "POTCAR"
     WritePotcar(Potcar, ["C", "Zr", "O"])
-    with pytest.raises(ValueError, match="does not match"):
+    with pytest.raises(ValueError, match="not consistent"):
         Rft.ValidatePotcarOrder(["Zr", "C", "O"], Potcar)
+
+
+def TestValidatePotcarOrderWarnsOnAbsentSpecies(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    Potcar = tmp_path / "POTCAR"
+    WritePotcar(Potcar, ["Zr", "C", "O"])  # POTCAR has C ...
+    Rft.ValidatePotcarOrder(["Zr", "O"], Potcar)  # ... but frame has no C
+    assert "trimmed" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# ReorderPositionToPotcar
+# ---------------------------------------------------------------------------
+
+def MakePositionDF(elements: list[str]) -> pd.DataFrame:
+    """A Position DataFrame with a unique tag coordinate per atom (to check stability)."""
+    return pd.DataFrame({
+        "Element": elements,
+        "x": [float(I) for I in range(len(elements))],
+        "y": [0.0] * len(elements),
+        "z": [0.0] * len(elements),
+    })
+
+
+def TestReorderGroupsSpeciesInPotcarOrder(tmp_path: Path) -> None:
+    # Scrambled/interleaved frame order.
+    Pos = MakePositionDF(["O", "Zr", "C", "O", "Zr"])
+    Out = Rft.ReorderPositionToPotcar(Pos, ["Zr", "C", "O"])
+    assert list(Out["Element"]) == ["Zr", "Zr", "C", "O", "O"]
+    # Within-species relative order preserved: the two Zr keep x=1 then x=4.
+    ZrX = Out.loc[Out["Element"] == "Zr", "x"].tolist()
+    assert ZrX == [1.0, 4.0]
+    OX = Out.loc[Out["Element"] == "O", "x"].tolist()
+    assert OX == [0.0, 3.0]
+
+
+def TestReorderHandlesPotcarSuffixes(tmp_path: Path) -> None:
+    Potcar = tmp_path / "POTCAR"
+    Potcar.write_text(
+        "  TITEL  = PAW_PBE Zr_sv 04Jan2005\n  END of PSCTR\n"
+        "  TITEL  = PAW_PBE C 08Apr2002\n  END of PSCTR\n"
+        "  TITEL  = PAW_PBE O_s 08Apr2002\n  END of PSCTR\n",
+        encoding="utf-8",
+    )
+    assert Rft.ParsePotcarElements(Potcar) == ["Zr", "C", "O"]
+    Pos = MakePositionDF(["O", "C", "Zr"])
+    Out = Rft.ReorderPositionToPotcar(Pos, Rft.ParsePotcarElements(Potcar))
+    assert list(Out["Element"]) == ["Zr", "C", "O"]
+
+
+def TestReorderRejectsUnknownElement() -> None:
+    Pos = MakePositionDF(["Zr", "N", "O"])
+    with pytest.raises(ValueError, match="no matching POTCAR"):
+        Rft.ReorderPositionToPotcar(Pos, ["Zr", "O"])
 
 
 def TestCheckStopConditionRejectsNGeMax(tmp_path: Path) -> None:
@@ -272,6 +327,68 @@ def TestResumeTrajectoryBuildsConsistentWorkspace(tmp_path: Path) -> None:
     # Root inputs placed for OxidationStep.
     assert (Target / "OxParams").exists()
     assert (Target / "CovalentRadii").exists()
+
+
+def TestResumeReordersPoscarToPotcarOrder(tmp_path: Path) -> None:
+    """The written POSCAR follows POTCAR order even when the xyz atom order differs."""
+    XyzDir = tmp_path / "src_xyz"
+    XyzDir.mkdir()
+    # xyz atoms deliberately in a non-POTCAR order (O, Zr, C), interleaved.
+    ScrambledAtoms = [
+        ("O", 5.0, 5.0, 5.0),
+        ("Zr", 1.0, 1.0, 1.0),
+        ("C", 3.0, 3.0, 3.0),
+        ("O", 6.0, 6.0, 6.0),
+    ]
+    NumFrames = 2 * Rft.MD_STEPS_PER_CYCLE
+    Frames = [(f'Lattice="{CUBIC_12}" Properties=species:S:1:pos:R:3 Step={I} Time={I}.0',
+               ScrambledAtoms) for I in range(1, NumFrames + 1)]
+    WriteXYZFile(XyzDir / "1273_3.xyz", Frames)
+    MakeRateAnalysis(3).to_csv(XyzDir / "RateAnalysis_1273_3.csv", index=False)
+    # POTCAR order Zr, C, O.
+    Inputs = BuildInputsDir(tmp_path, PotcarElements=["Zr", "C", "O"])
+    Target = tmp_path / "workspace"
+    Target.mkdir()
+
+    Rft.ResumeTrajectory("1273_3", XyzDir / "1273_3.xyz",
+                         XyzDir / "RateAnalysis_1273_3.csv", Target, Inputs)
+
+    Position, _Cell = vio.ReadPoscar(FileName=Target / "1273_3" / "Dir_VolSearch" / "POSCAR")
+    assert list(dict.fromkeys(Position["Element"])) == ["Zr", "C", "O"]
+    # Counts preserved: 1 Zr, 1 C, 2 O.
+    assert (Position["Element"] == "O").sum() == 2
+
+
+def TestResumeOFirstDatasetWithMatchingPotcar(tmp_path: Path) -> None:
+    """ZrC-style O-first data (O, Zr, C) with an O-first POTCAR: succeeds, no permutation."""
+    XyzDir = tmp_path / "src_xyz"
+    XyzDir.mkdir()
+    OFirstAtoms = [
+        ("O", 5.0, 5.0, 5.0),
+        ("Zr", 1.0, 1.0, 1.0),
+        ("C", 3.0, 3.0, 3.0),
+    ]
+    NumFrames = 2 * Rft.MD_STEPS_PER_CYCLE
+    Frames = [(f'Lattice="{CUBIC_12}" Properties=species:S:1:pos:R:3 Step={I} Time={I}.0',
+               OFirstAtoms) for I in range(1, NumFrames + 1)]
+    WriteXYZFile(XyzDir / "1073_1.xyz", Frames)
+    MakeRateAnalysis(3).to_csv(XyzDir / "RateAnalysis_1073_1.csv", index=False)
+    # POTCAR ordered O-first to match the data (O not last is allowed).
+    Inputs = BuildInputsDir(tmp_path, PotcarElements=["O", "Zr", "C"])
+    # OxParams must cover 1073.
+    (Inputs / "OxParams").write_text(
+        "InitO2Count = 10\nGasRatio = 2\nTemperatures = [1073]\nNSims = 4\n"
+        "AtomicRadiusTol = 1.50\nO2Tol = 0.5\nOSmoothing = 0.001\n", encoding="utf-8")
+    Target = tmp_path / "workspace"
+    Target.mkdir()
+
+    Summary = Rft.ResumeTrajectory("1073_1", XyzDir / "1073_1.xyz",
+                                   XyzDir / "RateAnalysis_1073_1.csv", Target, Inputs)
+    assert Summary["action"] == "prepared"
+
+    Position, _Cell = vio.ReadPoscar(FileName=Target / "1073_1" / "Dir_VolSearch" / "POSCAR")
+    # Native O-first order preserved (reorder was a no-op) — no seam permutation.
+    assert list(dict.fromkeys(Position["Element"])) == ["O", "Zr", "C"]
 
 
 def TestResumeDryRunWritesNothing(tmp_path: Path) -> None:

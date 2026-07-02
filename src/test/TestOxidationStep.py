@@ -21,7 +21,31 @@ def EnsureSrcOnPath() -> None:
 EnsureSrcOnPath()
 
 from workflow import OxidationStep as Ox  # noqa: E402
+from workflow import OxidationAnalysis as An  # noqa: E402
 from workflow import VaspIO as Vio  # noqa: E402
+
+
+def TestPlaceO2InsertsAfterLastOKeepingOContiguous() -> None:
+    """New O atoms go right after the last existing O (not at the absolute end), so O
+    stays contiguous even when a non-O species trails it (e.g. O-first Zr/C data)."""
+    Cell = pd.DataFrame(
+        [[10.0, 0.0, 0.0], [0.0, 10.0, 0.0], [0.0, 0.0, 10.0]], columns=["x", "y", "z"]
+    )
+    # O-first, with C after O: order O, O, Zr, C.
+    Positions = pd.DataFrame({
+        "Element": ["O", "O", "Zr", "C"],
+        "x": [0.10, 0.15, 0.50, 0.80],
+        "y": [0.10, 0.15, 0.50, 0.80],
+        "z": [0.10, 0.15, 0.50, 0.80],
+    })
+    NewSites = pd.DataFrame({"x": [0.30], "y": [0.30], "z": [0.30]})
+
+    Updated = An.PlaceO2Molecules(Positions, Cell, NewSites, BondLength=1.2)
+
+    # Two O atoms added, inserted after the last existing O (index 2..3), so C/Zr shift.
+    assert list(Updated["Element"]) == ["O", "O", "O", "O", "Zr", "C"]
+    # All O contiguous at the front; no stray trailing O after C.
+    assert Updated["Element"].tolist().count("O") == 4
 
 
 @pytest.fixture(name="TmpPath")
