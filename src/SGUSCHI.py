@@ -18,6 +18,7 @@ Re-run behaviour:
 
 import argparse
 import ast
+import csv
 import os
 import re
 import shlex
@@ -149,6 +150,91 @@ def ClassifySimulations(WorkDir: Path, Params: dict) -> Dict[str, str]:
             continue
         States[Label] = "pending"
     return States
+
+
+# ---------------------------------------------------------------------------
+# MaxRuntime resume reconciliation
+# ---------------------------------------------------------------------------
+
+def AchievedRuntimePs(VolSearchDir: Path) -> Optional[float]:
+    """Return the committed simulated time (ps) from RateAnalysis.csv, or None.
+
+    Reads the final 'Time (fs)' entry — the last cumulative time written by
+    OxidationStep — and converts fs → ps. Returns None if the file is missing,
+    empty, or the time column cannot be parsed.
+    """
+    RatePath = VolSearchDir / "RateAnalysis.csv"
+    if not RatePath.exists():
+        return None
+    try:
+        with RatePath.open("r", encoding="utf-8-sig", errors="ignore", newline="") as File:
+            Rows = list(csv.DictReader(File))
+    except OSError:
+        return None
+    if not Rows:
+        return None
+    for Key in ("Time (fs)", "Time", "Time_fs"):
+        Raw = Rows[-1].get(Key)
+        if Raw not in (None, ""):
+            try:
+                return float(Raw) / 1000.0
+            except ValueError:
+                return None
+    return None
+
+
+def ReopenTimeCappedSimulations(
+    WorkDir: Path, Params: dict, DryRun: bool = False
+) -> List[str]:
+    """Re-enable simulations that stopped at MaxRuntime but sit below a raised cap.
+
+    A run stopped by the runtime cap carries both ``volsearch_is_done`` and
+    ``maxruntime_reached``. If OxParams now specifies a ``MaxRuntime`` greater
+    than that trajectory's achieved runtime, both markers are removed so the sim
+    is reclassified as pending and ``volsearch_cont`` continues it — automating
+    the manual "raise MaxRuntime, delete the two markers, resubmit" recovery.
+
+    Natural-convergence stops (``volsearch_is_done`` without ``maxruntime_reached``)
+    are never touched. With ``DryRun`` the markers are reported but not deleted.
+    Returns the labels that were (or would be) reopened.
+    """
+    Raw = Params.get("MaxRuntime")
+    if Raw is None or str(Raw).strip() == "":
+        return []                       # no cap set → leave the manual path alone
+    try:
+        MaxRuntimePs = float(str(Raw).strip())
+    except (TypeError, ValueError):
+        print("WARNING: MaxRuntime in OxParams is not a number ({!r}); "
+              "skipping time-cap resume check.".format(Raw))
+        return []
+
+    Reopened: List[str] = []
+    Notes: List[str] = []
+    for Label, VolSearchDir in GetSimulationDirs(WorkDir, Params):
+        if not (VolSearchDir / "maxruntime_reached").exists():
+            continue                    # not a time-cap stop (or never ran)
+        Achieved = AchievedRuntimePs(VolSearchDir)
+        if Achieved is None:
+            Notes.append(
+                "  [{}] maxruntime_reached present but runtime unreadable — "
+                "left as done (delete markers by hand to force resume).".format(Label))
+            continue
+        if Achieved < MaxRuntimePs:
+            if not DryRun:
+                (VolSearchDir / "volsearch_is_done").unlink(missing_ok=True)
+                (VolSearchDir / "maxruntime_reached").unlink(missing_ok=True)
+            Reopened.append(Label)
+            Notes.append(
+                "  [{}] runtime {:.3f} ps < MaxRuntime {:.3f} ps — {} time-cap "
+                "markers; will continue.".format(
+                    Label, Achieved, MaxRuntimePs,
+                    "would clear" if DryRun else "cleared"))
+
+    if Notes:
+        print("Time-cap resume check (MaxRuntime = {:.3f} ps):".format(MaxRuntimePs))
+        for Note in Notes:
+            print(Note)
+    return Reopened
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +568,12 @@ def main() -> int:
     print("SGUSCHI — workspace: {}".format(WorkDir))
 
     Params = ReadOxParams(WorkDir)
+
+    # Reopen any time-capped simulation whose achieved runtime is now below a
+    # raised MaxRuntime, so a bare resubmit continues it without hand-deleting
+    # markers. Runs before classification so reopened sims count as pending.
+    ReopenTimeCappedSimulations(WorkDir, Params, DryRun=Args.dry_run)
+
     States = ClassifySimulations(WorkDir, Params)
 
     NewLabels = [L for L, S in States.items() if S == "new"]

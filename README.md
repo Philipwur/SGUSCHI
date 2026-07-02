@@ -102,7 +102,7 @@ All keys are **required** except `MaxRuntime`.
 | `OSmoothing` | Exponential smoothing factor α for O₂ count (default 0.001; heavily history-weighted) |
 | `MaxRuntime` | *(optional)* Stop simulation after this many ps of simulated time. If unset, runs until convergence. |
 
-> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, raise `MaxRuntime` in `OxParams`, then delete `volsearch_is_done` and `maxruntime_reached` from `Dir_VolSearch` and resubmit `OxidationMaster`. (`SGUSCHI.py` clears `job.exit`/`job.killed`/`sguschi_failed` automatically — no need to remove those.)
+> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, just raise `MaxRuntime` in `OxParams` and resubmit `OxidationMaster`. On startup `SGUSCHI.py` compares each time-capped run's achieved runtime (last `Time (fs)` in `RateAnalysis.csv`) against the new cap and, when it is now below it, automatically clears `volsearch_is_done` + `maxruntime_reached` so the run continues — no need to delete markers by hand. A run that reached the cap is only reopened by *raising* it; resubmitting with an unchanged (or lower) `MaxRuntime` leaves it done. Naturally-converged runs (which have `volsearch_is_done` but no `maxruntime_reached`) are never reopened. (`SGUSCHI.py` also clears `job.exit`/`job.killed`/`sguschi_failed` on resubmit.)
 
 ### CovalentRadii
 
