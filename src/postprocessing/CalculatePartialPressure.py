@@ -20,9 +20,9 @@ from pymatgen.optimization.neighbors import find_points_in_spheres
 # Gas volume is estimated with the Zr-distance gap method; the tag labels plots.
 VOLUME_TAG = "ZrDistance"
 
-# pymatgen's find_points_in_spheres wants `pbc` as C-long; np.int_ matches that
-# on every platform (int32 on Windows, int64 on Linux).
-_PBC = np.array([1, 1, 1], dtype=np.int_)
+# pymatgen's find_points_in_spheres wants `pbc` as int64; np.int_ is int32 on
+# Windows and raises "Buffer dtype mismatch", so the width is pinned explicitly.
+_PBC = np.array([1, 1, 1], dtype=np.int64)
 
 
 @dataclass

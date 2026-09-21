@@ -643,6 +643,13 @@ while ($stopflag == 0)
       
       python "$sluschipath/../../workflow/OxidationStep.py"
       if ( $? != 0 ) then
+        # OxidationStep exits non-zero both on real failures and on a clean stop
+        # (e.g. MaxRuntime reached, where it writes volsearch_is_done first).
+        # Only the former is fatal; the latter is a normal end of the run.
+        if ( -e volsearch_is_done ) then
+          echo "DONE volsearch_cont: OxidationStep.py reached its stopping condition (volsearch_is_done present); no new job submitted."
+          exit 0
+        endif
         echo "FATAL volsearch_cont: OxidationStep.py failed; no new job submitted."
         touch $failure_marker
         exit 1
