@@ -74,6 +74,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio  # noqa: E402
 from utils.FolderUtils import NumericStepFolders, RESUME_SEAM_MARKER  # noqa: E402
+from utils.InitialVasp import InitializeIncar  # noqa: E402
 
 # Files copied into each SimDir and Dir_VolSearch (same set as WorkSpaceSetup).
 SIM_INPUT_FILES = ["POTCAR", "KPOINTS", "INCAR", "job.in", "jobsub"]
@@ -438,24 +439,6 @@ def _CopyFile(Src: Path, Dst: Path) -> None:
     shutil.copy2(Src, Dst)
 
 
-def _SetIncarTemperature(IncarPath: Path, Temp: str) -> None:
-    """Set TEBEG/TEEND to Temp, preserving inline comments (mirrors WorkSpaceSetup)."""
-    with IncarPath.open("r", encoding="utf-8") as File:
-        Lines = File.readlines()
-    NewLines = []
-    for Line in Lines:
-        if re.search(r"\bTEBEG\b", Line, re.IGNORECASE):
-            Comment = "#" + Line.split("#", 1)[1].strip() if "#" in Line else ""
-            NewLines.append("TEBEG = {} {}\n".format(Temp, Comment))
-        elif re.search(r"\bTEEND\b", Line, re.IGNORECASE):
-            Comment = "#" + Line.split("#", 1)[1].strip() if "#" in Line else ""
-            NewLines.append("TEEND = {} {}\n".format(Temp, Comment))
-        else:
-            NewLines.append(Line)
-    with IncarPath.open("w", encoding="utf-8") as File:
-        File.writelines(NewLines)
-
-
 def _SetJobInTemp(JobInPath: Path, Temp: str) -> None:
     """Set 'temp = ...' in job.in to Temp (mirrors WorkSpaceSetup)."""
     with JobInPath.open("r", encoding="utf-8") as File:
@@ -538,7 +521,7 @@ def BuildWorkspaceTree(TargetRoot: Path, TrajName: str, InputsDir: Path,
 
     _WarnIfNotCovered(TargetRoot / "OxParams", Temp, _Sim, TrajName)
 
-    _SetIncarTemperature(SimDir / "INCAR", Temp)
+    InitializeIncar(SimDir / "INCAR", Temp)
     _SetJobInTemp(SimDir / "job.in", Temp)
 
     FolderTag = _MakeFolderTag(TrajName)

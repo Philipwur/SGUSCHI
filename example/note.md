@@ -23,9 +23,14 @@ Edit the files in this folder before running anything:
     sbatch OxidationMaster
 
 SGUSCHI.py (called by OxidationMaster on the compute node) will:
-1. Create simulation folder trees from OxParams (Temperatures × NSims)
+1. Create simulation folder trees from OxParams (Temperatures × NSims), including
+   [initial INCAR preparation](../README.md#incar-required-settings)
 2. Submit the initial VASP job in each `Dir_VolSearch` using `vaspcmd` from `job.in`
 3. Start `volsearch_cont` in all folders and run until completion or walltime
+
+To prepare and inspect inputs before submission, run
+`python /path/to/SGUSCHI/src/SGUSCHI.py . --prepare-only`. This applies the initial
+INCAR settings and preserves your chosen `POTIM`, without submitting jobs.
 
 **Step 3 — Extend or recover**
 

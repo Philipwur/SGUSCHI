@@ -176,6 +176,85 @@ def TestPreparedRunsSubmitTogetherAndDoNotResubmitQueuedJobs(Campaign, monkeypat
     assert len(Submitted) == 2
 
 
+@pytest.mark.parametrize("PrepareOnly", [False, True])
+def TestFirstIncarIsReadyBeforeSubmission(Campaign, monkeypatch, PrepareOnly):
+    Expected = {}
+    Templates = {}
+    for Name, Temp, Potim in [("low", 873, "1.0"), ("high", 1073, "0.8")]:
+        Root = Campaign / "jobs" / Name
+        Config = Root / "OxParams"
+        Config.write_text(Config.read_text().replace("[873]", "[{}]".format(Temp)))
+        Incar = Root / "INCAR"
+        Incar.write_text(
+            "# TEBEG is set per trajectory\nSIGMA = 0.2064\nNSW = 100\n"
+            "SMASS = 2\nNBANDS = 96\nPOTIM = {}\nEDIFF = 1e-4\n".format(Potim)
+        )
+        Templates[Incar] = Incar.read_bytes()
+        Expected[Root / "{}_1".format(Temp) / "Dir_VolSearch"] = (Temp, Potim)
+
+    def CheckIncar(Vsd):
+        Temp, Potim = Expected[Vsd]
+        Values = Vio.ReadKeyValueFile(Vsd / "INCAR")
+        assert Values["TEBEG"] == Values["TEEND"] == str(Temp)
+        assert float(Values["SIGMA"]) == pytest.approx(0.000086 * Temp)
+        assert Values["NSW"] == "80" and Values["SMASS"] == "0"
+        assert "NBANDS" not in Values
+        assert Values["POTIM"] == Potim and Values["EDIFF"] == "1e-4"
+
+    Submitted = []
+    def Submit(Argv, **Kwargs):
+        Vsd = Path(Kwargs["cwd"])
+        CheckIncar(Vsd)  # Inspect exactly what VASP would see at submission time.
+        assert (Vsd / ".vasp_submitted_step").read_text() == "1"
+        Submitted.append(Vsd)
+        return SimpleNamespace(returncode=0, stdout="Submitted batch job 100", stderr="")
+
+    if not PrepareOnly:
+        monkeypatch.setattr(Controller.subprocess, "run", Submit)
+        monkeypatch.setattr(Controller, "RunOrchestration", lambda *Args: 0)
+    assert Invoke(monkeypatch, Campaign, Prepare=PrepareOnly) == 0
+    for Vsd in Expected:
+        CheckIncar(Vsd)
+        assert (Vsd / "INCAR").read_bytes() == (Vsd.parent / "INCAR").read_bytes()
+    assert len(Submitted) == (0 if PrepareOnly else 2)
+    assert all(Path_.read_bytes() == Original for Path_, Original in Templates.items())
+
+
+def TestBadFirstJobSettingsPreventAllSubmissions(Campaign, monkeypatch):
+    assert Invoke(monkeypatch, Campaign, Prepare=True) == 0
+    JobIn = Campaign / "jobs" / "high" / "873_1" / "Dir_VolSearch" / "job.in"
+    JobIn.write_text("temp = invalid\nvaspcmd = sbatch\n")
+    assert Invoke(monkeypatch, Campaign) == 1
+    assert not list(Campaign.rglob(".vasp_submitted_step"))
+
+
+@pytest.mark.parametrize("PrepareOnly", [False, True])
+def TestOldPreparedFoldersAreInitializedWhileQueuedInputsArePreserved(Campaign, monkeypatch, PrepareOnly):
+    assert Invoke(monkeypatch, Campaign, Prepare=True) == 0
+    Old = Campaign / "jobs" / "low" / "873_1" / "Dir_VolSearch"
+    Queued = Campaign / "jobs" / "high" / "873_1" / "Dir_VolSearch"
+    OldIncar = Old / "INCAR"
+    OldIncar.write_text("POTIM = 0.8\nNBANDS = 96\nSIGMA = 0.2064\n")
+    (Queued / ".vasp_submitted_step").write_text("1")
+    (Queued / "INCAR").write_text("POTIM = 1.6\nNBANDS = 128\nBMIX = 0.4\n")
+    Before = (Queued / "INCAR").read_bytes()
+    Submitted = []
+    def Submit(Argv, **Kwargs):
+        Values = Vio.ReadKeyValueFile(OldIncar)
+        assert Values["SIGMA"] == "0.075078" and "NBANDS" not in Values
+        Submitted.append(Path(Kwargs["cwd"]))
+        return SimpleNamespace(returncode=0, stdout="Submitted batch job 100", stderr="")
+    if not PrepareOnly:
+        monkeypatch.setattr(Controller.subprocess, "run", Submit)
+        monkeypatch.setattr(Controller, "RunOrchestration", lambda *Args: 0)
+    assert Invoke(monkeypatch, Campaign, Prepare=PrepareOnly) == 0
+    Values = Vio.ReadKeyValueFile(OldIncar)
+    assert Values["SIGMA"] == "0.075078" and Values["POTIM"] == "0.8"
+    assert "NBANDS" not in Values
+    assert (Queued / "INCAR").read_bytes() == Before
+    assert Submitted == ([] if PrepareOnly else [Old])
+
+
 def TestFailedSubmissionIsIsolatedAndRetryable(Campaign, monkeypatch):
     Launched = []
     def Submit(Argv, **Kwargs):

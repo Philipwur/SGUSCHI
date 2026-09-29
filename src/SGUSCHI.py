@@ -12,7 +12,8 @@ JobSpecs in its OxParams optionally lists child workspaces; absent or [] keeps
 the legacy single-workspace behavior. All specifications share one controller.
 
 Re-run behaviour:
-    - Folders that already exist are never recreated or overwritten.
+    - Existing folders are retained; unsubmitted first-job INCARs are initialized.
+    - Inputs of queued or previously started trajectories are left unchanged.
     - Simulations marked done (volsearch_is_done or job.exit=0) are skipped.
     - New temperatures/NSims added to OxParams are set up on next submission.
     - Extra folders on disk not in OxParams are never touched.
@@ -34,6 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from utils import StatusLog
+from utils.InitialVasp import NeedsInitialVaspJob, PrepareInitialVasp
 from utils.JobSpecs import (
     CheckScientificInputs, LoadJobSpecs, RecordScientificInputs, INPUT_RECORD, REQUIRED_KEYS,
 )
@@ -70,7 +72,7 @@ def ParseArgs() -> argparse.Namespace:
     Parser.add_argument(
         "--prepare-only",
         action="store_true",
-        help="Create simulation folders only; do not submit VASP jobs or launch "
+        help="Prepare simulation folders and initial INCAR settings; do not submit VASP jobs or launch "
              "volsearch_cont (safe to run on a login node)",
     )
     return Parser.parse_args()
@@ -305,30 +307,6 @@ def RunSetup(WorkDir: Path, Params: dict, NewLabels: List[str], JobNamePrefix: s
 # ---------------------------------------------------------------------------
 # Initial VASP job submission
 # ---------------------------------------------------------------------------
-
-def NeedsInitialVaspJob(VolSearchDir: Path) -> bool:
-    """Submit a prepared or rejected first step, but never duplicate a queued job.
-
-    Any OUTCAR, numbered step folder, submission marker or recorded scheduler ID
-    is evidence of a previous launch. This also handles --prepare-only followed
-    by a normal invocation, where the directory exists but has never been queued.
-    """
-    # Check for numeric step folders (volsearch_cont has already run at least one cycle)
-    try:
-        HasStepFolders = any(
-            C.name.isdigit() for C in VolSearchDir.iterdir() if C.is_dir()
-        )
-    except OSError:
-        return False
-    if HasStepFolders:
-        return False
-
-    return not (
-        (VolSearchDir / "OUTCAR").exists()
-        or (VolSearchDir / ".vasp_submitted_step").exists()
-        or StatusLog.LastEvent(VolSearchDir, "submitted") is not None
-    )
-
 
 def SubmitInitialVaspJobs(
     WorkDir: Path, Params: dict, NewLabels: List[str], LabelPrefix: str = "",
@@ -646,8 +624,13 @@ def main() -> int:
             NewLocal = [L for L, S in LocalStates[Spec.Id].items() if S == "new"]
             if NewLocal:
                 RunSetup(Spec.Root, Spec.Params, NewLocal, JobNamePrefix=Spec.Id)
+        # Complete preparation for every spec before queuing any first job. This
+        # also upgrades old --prepare-only folders, while preserving live runs.
+        for Label, Vsd in AllDirs:
+            if Label in PendingLabels:
+                PrepareInitialVasp(Vsd)
         WriteExpectedSimulations(WorkDir, AllDirs, Grouped=bool(Specs[0].Id))
-    except OSError as Error:
+    except (OSError, ValueError) as Error:
         print("ERROR preparing workspaces: {}".format(Error))
         return 1
 
@@ -655,7 +638,7 @@ def main() -> int:
         if NewLabels:
             print("Prepared {} new simulation folder(s).".format(len(NewLabels)))
         else:
-            print("No new simulation folders to prepare.")
+            print("No new simulation folders; checked unsubmitted first-job inputs.")
         print("--prepare-only: skipping VASP job submission and volsearch_cont launch.")
         return 0
 

@@ -40,6 +40,7 @@ from typing import List, Optional, Tuple
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from workflow import VaspIO as vio
+from utils.InitialVasp import InitializeIncar
 import OxidationPreprocessing as opp
 
 
@@ -130,29 +131,7 @@ def SetupWorkspace(
             for FN in ForCopy:
                 CopyFile(WorkDir / FN, SimDir / FN)
 
-            # Update TEBEG / TEEND in INCAR to match folder temp
-            IncarPath = SimDir / "INCAR"
-            if IncarPath.exists():
-                with IncarPath.open("r", encoding="utf-8") as F:
-                    Lines = F.readlines()
-
-                NewLines = []
-                for Line in Lines:
-                    if re.search(r"\bTEBEG\b", Line, re.IGNORECASE):
-                        Comment = ""
-                        if "#" in Line:
-                            Comment = "#" + Line.split("#", 1)[1].strip()
-                        NewLines.append("TEBEG = {} {}\n".format(Temp, Comment))
-                    elif re.search(r"\bTEEND\b", Line, re.IGNORECASE):
-                        Comment = ""
-                        if "#" in Line:
-                            Comment = "#" + Line.split("#", 1)[1].strip()
-                        NewLines.append("TEEND = {} {}\n".format(Temp, Comment))
-                    else:
-                        NewLines.append(Line)
-
-                with IncarPath.open("w", encoding="utf-8") as F:
-                    F.writelines(NewLines)
+            InitializeIncar(SimDir / "INCAR", Temp)
 
             # Update 'temp = ...' in job.in to match folder temp
             JobInPath = SimDir / "job.in"

@@ -95,9 +95,12 @@ input checklist.
    ```
 
    Replace `/path/to/SGUSCHI` with your clone's location. `--dry-run` reports the
-   plan without writing files. `--prepare-only` creates missing run folders
-   without submitting jobs or clearing completion markers; existing folders
-   are preserved. Both can be used on a login node.
+   plan without writing files. `--prepare-only` creates missing run folders and
+   applies the [initial INCAR settings](#incar-required-settings), without
+   submitting jobs or clearing completion markers. It also initializes older
+   prepared folders that have never been submitted. Inputs of queued or
+   previously started trajectories are preserved. Both commands can be used
+   on a login node.
 5. Submit the master job from the same workspace:
 
    ```bash
@@ -107,6 +110,22 @@ input checklist.
    Normal submission also prepares missing folders, so step 4 is optional.
    The controller submits initial VASP jobs and starts `volsearch_cont` for all
    pending trajectories. Continue with [Monitoring and outputs](#monitoring-and-outputs).
+
+For a manual first VASP submission after `--prepare-only`, work inside the
+chosen trajectory's `Dir_VolSearch`. With the controller stopped and no VASP
+job already queued or running there, record the first-step submission guard
+before submitting:
+
+```bash
+cd 873_1/Dir_VolSearch  # In grouped mode, include the specification's path
+printf '1\n' > .vasp_submitted_step && sbatch jobsub
+```
+
+Use `qsub` instead if configured for PBS. This guard prevents a later controller
+start from submitting the same job again while the manual job is still queued
+and has no `OUTCAR`. If submission is definitely rejected, remove the guard
+before retrying; after an ambiguous scheduler timeout, check the queue first.
+Normally, submitting `OxidationMaster` handles this bookkeeping automatically.
 
 ## Multiple job specifications with one controller
 
@@ -373,9 +392,29 @@ O = 0.66
 |---|---|---|
 | `IBRION` | `0` | Molecular dynamics |
 | `ISIF` | `2` | Fixed lattice during each VASP segment; ions move |
-| `NSW` | `80` | Steps per cycle; enforced by `volsearch_cont` at runtime |
+| `NSW` | `80` | Steps per cycle; set before the first submission |
 
-Setup sets `TEBEG` and `TEEND` from the trajectory's temperature.
+Preparation applies the same initial settings previously applied at
+`volsearch_cont` startup:
+
+| Tag | Initial value |
+|---|---|
+| `TEBEG`, `TEEND` | Trajectory temperature from `Temperatures` |
+| `SIGMA` | `0.000086 × temperature` eV, retaining the existing SLUSCHI formula |
+| `NSW` | `80` |
+| `SMASS` | `0` |
+| `NBANDS` | Explicit value removed so VASP chooses its initial default |
+
+These settings are ready in the generated `INCAR` files before either automatic
+or manual submission; workspace input templates are unchanged. `POTIM` is
+preserved from your template: use `POTIM = 1.0` for a 1 fs initial timestep, or
+`0.8` for 0.8 fs. Set `adj_potim = 0` in `job.in` to keep the timestep fixed;
+otherwise SLUSCHI may adjust it after completed segments.
+
+Preparation stops before any initial submission if initialization fails.
+Resuming a submitted or previously started trajectory does not reapply initial
+settings or remove its adapted `NBANDS`. Rebuilding from XYZ with
+`ResumeFromTrajectory.py` initializes the newly reconstructed inputs explicitly.
 
 ### job.in
 
@@ -394,6 +433,11 @@ in effect. Changing `INCAR` or `job.in` alone does not change the enforced
 prepares new trajectories, reconciles runtime caps, submits initial VASP jobs,
 and starts one `volsearch_cont` process per pending trajectory. The controller
 also starts the campaign or workspace summary watcher.
+
+`src/utils/InitialVasp.py` owns initial INCAR preparation. Workspace setup and
+trajectory reconstruction share it, and the controller prepares all eligible
+first jobs before submitting any. `volsearch_cont` calls the same guarded helper
+for standalone startup; it leaves submitted/running and historical inputs alone.
 
 `volsearch_cont` is a C-shell script that invokes the compiled SLUSCHI helpers.
 For each MD segment it:

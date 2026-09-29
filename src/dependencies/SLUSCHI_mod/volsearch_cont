@@ -46,42 +46,11 @@ if ( "$temp" == "" ) then
   touch $failure_marker
   exit 1
 endif
-sed -i '/NBANDS/d' INCAR
-set sigma = `awk -v a="0.000086" -v b=$temp 'BEGIN{print (b*a)}'`
-if ( "$sigma" == "" ) then
-  echo FATAL volsearch_cont: failed to calculate SIGMA from temp $temp.
-  touch $failure_marker
-  exit 1
-endif
-
-#$sluschipath/UpdateINCAR PREC normal
-$sluschipath/UpdateINCAR SIGMA $sigma
+# SGUSCHI normally initializes before submission. Reuse that preparation for
+# standalone starts, but never rewrite queued/running or previously run inputs.
+python "$sluschipath/../../utils/InitialVasp.py"
 if ( $? != 0 ) then
-  echo FATAL volsearch_cont: failed to update SIGMA.
-  touch $failure_marker
-  exit 1
-endif
-$sluschipath/UpdateINCAR TEBEG $temp 
-if ( $? != 0 ) then
-  echo FATAL volsearch_cont: failed to update TEBEG.
-  touch $failure_marker
-  exit 1
-endif
-$sluschipath/UpdateINCAR TEEND $temp 
-if ( $? != 0 ) then
-  echo FATAL volsearch_cont: failed to update TEEND.
-  touch $failure_marker
-  exit 1
-endif
-$sluschipath/UpdateINCAR NSW 80
-if ( $? != 0 ) then
-  echo FATAL volsearch_cont: failed to update NSW.
-  touch $failure_marker
-  exit 1
-endif
-$sluschipath/UpdateINCAR SMASS 0 
-if ( $? != 0 ) then
-  echo FATAL volsearch_cont: failed to update SMASS.
+  echo FATAL volsearch_cont: initial VASP preparation failed.
   touch $failure_marker
   exit 1
 endif

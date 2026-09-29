@@ -23,6 +23,15 @@ def TestUpdateIncarValidatesBeforeDeletingTag() -> None:
     assert Text.index('if ( "$tag" == ""') < Text.index("sed -i")
 
 
+def TestVolsearchStartupUsesGuardedPreparation() -> None:
+    """Startup must not reset an INCAR already handed to VASP, including NBANDS."""
+    Startup = ReadScript("volsearch_cont").split("# submit the first job", 1)[0]
+    assert 'python "$sluschipath/../../utils/InitialVasp.py"' in Startup
+    assert "FATAL volsearch_cont: initial VASP preparation failed." in Startup
+    assert "UpdateINCAR" not in Startup
+    assert "sed -i" not in Startup
+
+
 def TestAdjustBmixRejectsMissingOrInvalidInputs() -> None:
     """BMIX adjustment should fail on missing BMIX/GAMMA instead of writing blanks."""
     Text = ReadScript("AdjustBMIX")

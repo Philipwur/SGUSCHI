@@ -296,6 +296,9 @@ def MakeSource(tmp_path: Path, N: int = 2) -> tuple[Path, Path]:
 
 def TestResumeTrajectoryBuildsConsistentWorkspace(tmp_path: Path) -> None:
     XyzDir, Inputs = MakeSource(tmp_path, N=3)
+    (Inputs / "INCAR").write_text(
+        "POTIM = 0.8\nNSW = 100\nSMASS = 2\nSIGMA = 0.2\nNBANDS = 96\n"
+    )
     Target = tmp_path / "workspace"
     Target.mkdir()
 
@@ -306,6 +309,11 @@ def TestResumeTrajectoryBuildsConsistentWorkspace(tmp_path: Path) -> None:
     assert Summary["N"] == 3
     Vsd = Target / "1273_3" / "Dir_VolSearch"
     assert Vsd.is_dir()
+    Incar = vio.ReadKeyValueFile(Vsd / "INCAR")
+    assert Incar["TEBEG"] == Incar["TEEND"] == "1273"
+    assert Incar["SIGMA"] == "0.109478"
+    assert Incar["NSW"] == "80" and Incar["SMASS"] == "0"
+    assert Incar["POTIM"] == "0.8" and "NBANDS" not in Incar
 
     # Invariant: placeholders == N, RateAnalysis rows == N+1.
     assert NumericStepFolders(Vsd) == [1, 2, 3]
