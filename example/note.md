@@ -1,4 +1,5 @@
 This directory shows a typical starting point for running SGUSCHI simulations.
+For the full walkthrough, see the [README quick start](../README.md#quick-start).
 
 ## Quick start
 
@@ -33,13 +34,19 @@ To extend simulations or recover after a walltime failure, simply resubmit:
     sbatch OxidationMaster
 
 Existing folders and finished simulations are skipped automatically.
+See [resuming and extending runs](../README.md#resuming-and-extending-runs) for
+runtime caps and grouped-input restrictions.
 
 **Step 4 — Monitor results**
 
-Results accumulate in each simulation's `xyz_files/` folder.
+Results accumulate in the workspace's `xyz_files/` folder (inside each child
+workspace for grouped runs).
 Monitor progress from the workspace directory with:
 
-    python /path/to/SGUSCHI/src/utils/SimulationSummary.py .
+    python /path/to/SGUSCHI/src/utils/SimulationSummary.py . --stdout
+
+Omit `--stdout` to write the text and TSV summaries. See
+[monitoring and outputs](../README.md#monitoring-and-outputs) for columns and paths.
 
 ## Notes
 
@@ -47,7 +54,9 @@ Monitor progress from the workspace directory with:
   one `OxidationMaster`, create a campaign directory with a top-level `OxParams`
   containing e.g. `JobSpecs = ["jobs/ZrC_low", "jobs/ZrN_high"]`. Copy the input
   files in this example into each child directory and customize them separately.
-  Keep each child's `JobSpecs` empty. See the README for grouped resume rules.
+  Keep each child's `JobSpecs` empty. See
+  [multiple specifications](../README.md#multiple-job-specifications-with-one-controller)
+  for setup and directory rules.
 
 - The POSCAR should be a simple cubic structure. The x-axis will be expanded by
   `GasRatio` and filled with `InitO2Count` O₂ molecules during setup.

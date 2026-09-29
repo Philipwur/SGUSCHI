@@ -66,6 +66,14 @@ def AddVacuum(Position, CellDim, GasRatio, Axis='x'):
     AllGaps = np.append(Gaps, WrapGap)
     MaxIdx = int(np.argmax(AllGaps))
 
+    # Preserve the input's surface planes when the boundary gap is tied for
+    # largest. Ideal crystal layers have equal gaps; decimal roundoff must not
+    # pick an interior cut and expose a different SQS decoration. A genuinely
+    # smaller boundary gap still uses the largest interior gap, as needed for
+    # a layer that straddles the periodic boundary.
+    if np.isclose(WrapGap, AllGaps[MaxIdx], rtol=0.0, atol=1e-12):
+        MaxIdx = len(Gaps)
+
     if MaxIdx < len(Gaps):
         GapCenter = (Sorted[MaxIdx] + Sorted[MaxIdx + 1]) / 2.0
     else:

@@ -1,174 +1,204 @@
 # SGUSCHI
 
-**SGUSCHI** (Solid-Gas in Ultra Small Coexistence with Hovering Interfaces) is a fork of [SLUSCHI](https://github.com/qjhong/SLUSCHI) for simulating pure O₂ oxidation environments using the small-cell methodology. It couples the SLUSCHI cluster Fortran MD orchestrator with a Python analysis layer: every 80 VASP MD steps, the Python layer detects and removes non-O₂ gas molecules, tracks the void fraction, and conditionally inserts new O₂ molecules based on an exponentially smoothed count. Outputs gas management CSVs and xyz data for easy analysis.
+**SGUSCHI** (Solid-Gas in Ultra Small Coexistence with Hovering Interfaces) is a
+fork of [SLUSCHI](https://github.com/qjhong/SLUSCHI) for simulating pure O₂
+oxidation environments using the small-cell methodology. It couples the SLUSCHI
+MD workflow with Python gas analysis: every 80 VASP MD steps, SGUSCHI removes
+detected non-O₂ gas molecules, tracks the void fraction, and conditionally adds
+O₂ based on an exponentially smoothed molecule count. Results include XYZ
+trajectories and gas-management CSV files.
 
 <p align="center">
   <img src="docs/Visual_Abstract_git.png" width="85%" alt="Visual abstract">
 </p>
-Paper can be found at (insert doi here)
 
-Insert lisence here
+## Supported systems
 
+The workflow has been tested on **cubic Zr refractory materials**, such as ZrC
+and ZrN, in **pure O₂**. Start with a bulk supercell containing no oxygen and no
+pre-existing gas region; preprocessing creates the gas region along the x-axis.
+Void tracking currently relies on Zr atoms. See [Known limitations](#known-limitations)
+for the full material, geometry, and gas-model restrictions.
 
+## Contents
 
-## Requirements
+- [Requirements and installation](#requirements-and-installation)
+- [Quick start: one specification](#quick-start)
+- [Multiple job specifications with one controller](#multiple-job-specifications-with-one-controller)
+- [Monitoring and outputs](#monitoring-and-outputs)
+- [Resuming and extending runs](#resuming-and-extending-runs)
+- [Configuration reference](#configuration-reference)
+- [Developer information](#developer-information)
+- [Known limitations](#known-limitations)
+- [Citation and license](#citation-and-license)
 
-- **Python** ≥ 3.8 with `numpy`, `pandas`, `scipy`
-- **VASP** licensed and working installation (tested with standard and MLFF modes)
-- **Fortran compiler** (gfortran or ifort) to build the SLUSCHI binary
-- **Job scheduler**: tested on **Slurm** and **PBS Torque**
-- Optional (postprocessing): `plotly`, `tqdm`
+## Requirements and installation
 
-## Installation
+### Requirements
+
+- **Python ≥ 3.8** with `numpy`, `pandas`, and `scipy`.
+- **VASP**, licensed and working; standard and MLFF modes have been tested.
+- **Fortran compiler**, such as `ifort`, `ifx`, or `gfortran`, to build the helpers.
+- **C shell (`csh`)** for the SLUSCHI control scripts.
+- **Job scheduler**: tested with Slurm and PBS Torque. The supplied master script
+  uses Slurm; adapt its directives and submission command for PBS.
+- Optional postprocessing dependencies: `plotly`, `tqdm`.
+
+### Installation
+
+From the cloned repository root:
 
 ```bash
-# Build the Fortran orchestrator
+python -m pip install numpy pandas scipy
+
+# The Makefile defaults to ifort. Use CC=ifx or CC=gfortran as appropriate.
 cd src/dependencies/SLUSCHI_mod
-make
+make CC=ifort
 chmod +x *
+cd ../../..
 
-# Install Python dependencies
-pip install numpy pandas scipy
-
-# Optional: development tools (tests, formatting, linting)
-pip install pytest black ruff
+# Optional postprocessing dependencies
+python -m pip install plotly tqdm
 ```
 
-## Testing
+For development dependencies and test commands, see [Testing](#testing).
 
-The test suite lives in `src/test/` and must be run from that directory (`conftest.py`
-adds `src/` to `sys.path`):
+## Quick start
 
-```bash
-cd src/test
-pytest                                  # full suite
-pytest TestGasWorkflow.py               # a single module
-pytest TestVaspioIo.py::TestName        # a single class
-python RunTests.py                      # alternative runner
-```
+This starts one specification with any number of temperatures and replicas.
+The [example directory](example/) contains input templates; its `POTCAR` is empty
+and must be supplied. See the [example notes](example/note.md) for a compact
+input checklist.
 
-`TestPressureAvg.py` compiles the Fortran orchestrator and is auto-skipped if no
-`ifort`/`ifx`/`gfortran` is on `PATH`.
+1. Copy the example into a separate simulation workspace. Customize `POSCAR`,
+   `POTCAR`, `INCAR`, `KPOINTS`, `job.in`, `jobsub`, `OxParams`, and `CovalentRadii`.
+   The [configuration reference](#configuration-reference) describes each file.
+2. In `OxParams`, leave `JobSpecs = []` or omit it. Set temperatures and replicas,
+   along with the gas settings. For example:
 
-## Quick Start
+   ```python
+   Temperatures = [873, 973]
+   NSims = 4
+   ```
 
-The `example/` directory contains a ready-to-use starting point (with empty POTCAR). See `example/note.md` for the quick-start steps and per-file customisation notes. The steps are:
+   This produces **four trajectories per temperature**, eight in total, with
+   names such as `873_1`, `873_2`, and `973_1`.
+3. Configure `jobsub` to launch VASP on your cluster. Set `vaspcmd` in `job.in`
+   to the scheduler command, such as `sbatch` or `qsub`. Customize
+   `OxidationMaster`: scheduler directives, module loads, and the absolute path
+   to `SGUSCHI.py`.
+4. From the simulation workspace, inspect and optionally prepare the run:
 
-1. Copy the `example/` folder to your workspace and populate it:
-   `POSCAR` (supercell, no O atoms, no gas region), `POTCAR`, `INCAR`, `KPOINTS`,
-   `job.in`, `jobsub`, `OxParams`, `CovalentRadii`.
-2. Customise `OxidationMaster`: set the `#SBATCH` tags, `module load` lines for your
-   cluster, and the path to `SGUSCHI.py`.
-3. Submit and resubmit as needed:
+   ```bash
+   python /path/to/SGUSCHI/src/SGUSCHI.py . --dry-run
+   python /path/to/SGUSCHI/src/SGUSCHI.py . --prepare-only
+   ```
+
+   Replace `/path/to/SGUSCHI` with your clone's location. `--dry-run` reports the
+   plan without writing files. `--prepare-only` creates missing run folders
+   without submitting jobs or clearing completion markers; existing folders
+   are preserved. Both can be used on a login node.
+5. Submit the master job from the same workspace:
+
    ```bash
    sbatch OxidationMaster
    ```
-   `SGUSCHI.py` handles everything automatically: folder creation, initial VASP job
-   submission, and running `volsearch_cont` in all simulation directories.
-4. Results are written to `xyz_files/`.
 
-> **Scheduler command:** `vaspcmd` in `job.in` controls how VASP jobs are submitted
-> (e.g. `vaspcmd = sbatch` for Slurm, `vaspcmd = qsub` for PBS Torque). `SGUSCHI.py`
-> reads this key to submit the initial VASP job in each `Dir_VolSearch` — set it to
-> match your cluster scheduler before running.
+   Normal submission also prepares missing folders, so step 4 is optional.
+   The controller submits initial VASP jobs and starts `volsearch_cont` for all
+   pending trajectories. Continue with [Monitoring and outputs](#monitoring-and-outputs).
 
-> **Inspecting / preparing without submitting:** `SGUSCHI.py` accepts two flags useful
-> on a login node:
-> - `--dry-run` — print the new/pending/done classification and what *would* be done,
->   without creating folders or submitting anything.
-> - `--prepare-only` — create the simulation folder trees (templated `INCAR`/`job.in`,
->   per-folder `POSCAR`, `Dir_VolSearch`/`Dir_OptUnitCell`, etc.) but do **not** submit
->   VASP jobs or launch `volsearch_cont`. Safe to run on a login node; idempotent
->   (existing folders are skipped).
->
-> ```bash
-> python src/SGUSCHI.py [WorkDir] --prepare-only
-> ```
+## Multiple job specifications with one controller
 
-## Configuration Reference
+Use grouped specifications to run different starting compositions or O₂-control
+settings together. Each specification is a complete workspace with its own
+inputs, temperatures, replica count, and optional runtime cap.
 
-### OxParams
+1. Create a campaign directory with one `OxidationMaster` and one top-level
+   `OxParams`. Create a child directory for each specification, using the same
+   input files as in the [quick start](#quick-start):
 
-For a single workspace, all scientific keys below are **required** except
-`MaxRuntime`. `JobSpecs` is optional and disabled by default.
+   ```text
+   campaign/
+   ├── OxidationMaster
+   ├── OxParams                     # JobSpecs list
+   └── jobs/
+       ├── ZrC_low/
+       │   ├── OxParams             # Scientific settings, temperatures, replicas
+       │   ├── POSCAR, POTCAR, INCAR, KPOINTS
+       │   ├── job.in, jobsub, CovalentRadii
+       │   ├── 873_1/Dir_VolSearch/  # Generated during preparation
+       │   └── xyz_files/           # This specification's trajectories
+       ├── ZrC_high/
+       │   └── ...
+       └── ZrN_low/
+           └── ...
+   ```
 
-| Key | Description |
-|-----|-------------|
-| `JobSpecs` | *(optional; default `[]`)* List of child workspace directories to control together. An absent or empty list keeps the normal single-workspace behavior. See below. |
-| `Temperatures` | List of simulation temperatures in K |
-| `NSims` | Number of parallel simulation replicas per temperature |
-| `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
-| `InitO2Count` | Number of O₂ molecules placed at initialisation |
-| `AtomicRadiusTol` | Multiplier applied to the sum of covalent radii for bond detection |
-| `O2Tol` | Target O₂ count per unit void fraction |
-| `OSmoothing` | Exponential smoothing factor α for O₂ count (default 0.001; heavily history-weighted) |
-| `MaxRuntime` | *(optional)* Stop simulation after this many ps of simulated time. If unset, runs until convergence. |
+2. Put the specification list on one line in the top-level `OxParams`:
 
-> **Resuming after `MaxRuntime`:** To extend a time-capped simulation, just raise `MaxRuntime` in `OxParams` and resubmit `OxidationMaster`. On startup `SGUSCHI.py` compares each time-capped run's achieved runtime (last `Time (fs)` in `RateAnalysis.csv`) against the new cap and, when it is now below it, automatically clears `volsearch_is_done` + `maxruntime_reached` so the run continues — no need to delete markers by hand. A run that reached the cap is only reopened by *raising* it; resubmitting with an unchanged (or lower) `MaxRuntime` leaves it done. Naturally-converged runs (which have `volsearch_is_done` but no `maxruntime_reached`) are never reopened. (`SGUSCHI.py` also clears `job.exit`/`job.killed`/`sguschi_failed` on resubmit.)
+   ```python
+   JobSpecs = ["jobs/ZrC_low", "jobs/ZrC_high", "jobs/ZrN_low"]
+   ```
 
-### Multiple job specifications with one controller
+   `JobSpecs` is optional and disabled by default: omitting it or setting it to
+   `[]` uses the single-workspace layout. When enabled, the top-level file only
+   needs this list; scientific settings there are ignored. Child workspaces do
+   not inherit inputs or settings from the campaign root.
+3. Customize each child's complete inputs. Leave its `JobSpecs` empty or omit
+   it. `NSims` applies **per temperature within that specification**, and can
+   differ between children. For example, two temperatures with `NSims = 3`
+   create six trajectories in that child.
+4. Configure the top-level `OxidationMaster` as in the quick start. From the
+   campaign directory, use the same inspection, preparation, and submission
+   commands:
 
-To run different starting compositions or O₂-control settings together, put this
-in the campaign's top-level `OxParams` (one line):
-
-```python
-JobSpecs = ["jobs/ZrC_low", "jobs/ZrC_high", "jobs/ZrN_low"]
-```
-
-This is an opt-in list, not a boolean. Leave it out or use `JobSpecs = []` to
-disable it. When enabled, the top-level file only needs `JobSpecs`; scientific
-settings in that file are ignored. Each listed workspace has its own complete
-inputs, without inheritance from the campaign directory:
-
-```text
-campaign/
-├── OxidationMaster
-├── OxParams                     # JobSpecs list
-└── jobs/
-    ├── ZrC_low/
-    │   ├── OxParams             # Temperatures, NSims, gas settings, MaxRuntime
-    │   ├── POSCAR, POTCAR, INCAR, KPOINTS
-    │   ├── job.in, jobsub, CovalentRadii
-    │   ├── 873_1/Dir_VolSearch/  # Generated by SGUSCHI
-    │   └── xyz_files/           # This specification's trajectories
-    ├── ZrC_high/
-    │   └── ...
-    └── ZrN_low/
-        └── ...
-```
+   ```bash
+   python /path/to/SGUSCHI/src/SGUSCHI.py . --dry-run
+   python /path/to/SGUSCHI/src/SGUSCHI.py . --prepare-only
+   sbatch OxidationMaster
+   ```
 
 Use paths relative to the campaign, preferably with forward slashes. Directory
-basenames are specification IDs and must be unique (ignoring case), using
-letters, digits, dots, underscores or hyphens, starting with a letter or digit.
-Directories must stay inside the campaign and cannot overlap. Nested `JobSpecs`
-lists are not supported; omit the key or leave it empty in each child.
-The campaign's `SimulationSummary`, `.simulation_summary`, and `logs` locations
-are reserved for controller output and cannot contain specification workspaces.
+basenames are specification IDs and must be unique, ignoring case. Names must
+start with a letter or digit and contain only letters, digits, dots, underscores,
+or hyphens. Directories must stay inside the campaign and cannot overlap.
+Nested `JobSpecs` lists are not supported. The campaign's `SimulationSummary`,
+`.simulation_summary`, and `logs` locations are reserved for controller output.
 
-Run the usual commands from the campaign directory:
+All specifications are validated before submission, and one controller launches
+all pending trajectories concurrently. Runs such as `ZrC_low/873_1` and
+`ZrN_low/873_1` have separate state and output; scheduler job names include the
+specification ID. A failed initial submission does not prevent other eligible
+runs from launching. See [Resuming and extending runs](#resuming-and-extending-runs)
+before changing inputs for an existing specification.
+
+## Monitoring and outputs
+
+### Simulation summary
+
+From the workspace or campaign root, print a fresh summary:
 
 ```bash
-python /path/to/SGUSCHI/src/SGUSCHI.py . --dry-run
-python /path/to/SGUSCHI/src/SGUSCHI.py . --prepare-only
-sbatch OxidationMaster
+python /path/to/SGUSCHI/src/utils/SimulationSummary.py . --stdout
 ```
 
-Every specification is checked before any jobs are submitted. Setup uses its
-own inputs, and one controller launches all pending simulations concurrently.
-For example, `ZrC_low/873_1` and `ZrN_low/873_1` have separate state and output.
-Scheduler job names include the specification ID. A failed initial submission
-does not prevent other specifications from launching; resubmission retries the
-rejected first job without duplicating jobs already recorded as submitted.
+To write both the text and TSV files, omit `--stdout`:
 
-After preparation or a normal launch, the campaign's `SimulationSummary.py`
-output includes all selected specifications using the generated
-`.simulation_summary/expected.tsv`. Local trajectory filenames remain unchanged,
-so repair and trajectory-resume tools can be used with each specification's
-directory as their workspace. Removing a specification from the list leaves its
-files untouched and removes it from the campaign's expected run list.
+```bash
+python /path/to/SGUSCHI/src/utils/SimulationSummary.py .
+```
 
-The root `SimulationSummary` text file and `logs/SimulationSummary.tsv` contain
-one row per trajectory, with separate `JobFolder` and `Trajectory` columns:
+When the controller launches trajectories, it starts a watcher that refreshes
+these files every **60 seconds** while the controller is alive:
+
+| Location, relative to the workspace or campaign | Contents |
+|---|---|
+| `SimulationSummary` | Readable text table |
+| `logs/SimulationSummary.tsv` | Tab-separated version of the same table |
+
+Both contain **one row per trajectory**, with separate job-folder and trajectory
+columns. For example, immediately after grouped preparation:
 
 ```text
 JobFolder  Trajectory  Status       ...
@@ -178,110 +208,292 @@ ZrC_high   873_1       NOT_STARTED  ...
 ZrC_high   873_2       NOT_STARTED  ...
 ```
 
-`JobFolder` is the specification directory's basename; `Trajectory` is its local
-temperature/replica folder name. For an ungrouped workspace or a summary run
-directly inside one specification, `JobFolder` displays `-`. Refreshing the
-summary rewrites both outputs with this format; no run migration is needed.
+`JobFolder` is the specification directory's basename; `Trajectory` is the local
+temperature/replica folder name. Other columns report status, age of the latest
+activity, step folders, rate-analysis rows, simulated time in ps, O₂ added,
+molecules removed, estimated wall/queue times, and status details. Trajectories
+are reported individually, without averaging them together.
 
-**Resuming grouped runs:** the controller saves `.sguschi_inputs.json` in each
-specification directory on first preparation. On later invocations it rejects
-changes to scientific `OxParams` settings, the contents of `POSCAR`, `POTCAR`,
-`INCAR`, `KPOINTS`, `CovalentRadii`, or scientific `job.in` settings. Create a new
-specification directory containing just the new input files for those changes;
-do not copy old trajectories or the input record. Adding temperatures/replicas,
-changing `MaxRuntime`, and changing scheduler submission settings (`jobsub` or
-`vaspcmd`) are allowed. Existing run inputs are not overwritten during setup;
-changing root scheduler templates only affects newly prepared runs, so update
-existing run copies explicitly when necessary. Runtime caps are evaluated per
-specification. `--dry-run` writes nothing, and `--prepare-only` does not clear
-completion markers or submit jobs.
+Common statuses include `NOT_STARTED`, `RUNNING` (including queued jobs), `DONE`,
+`FAILED`, `KILLED`, `AWAITING` manual submission, and `STUCK`. Read `Detail` and
+the trajectory's logs when action is needed; [recovery guidance](#resuming-and-extending-runs)
+is below.
 
-For an existing workspace without an input record, the first grouped invocation
+Grouped summaries use `.simulation_summary/expected.tsv`, generated by the
+controller during preparation or normal startup. They include only selected
+runs. After editing `JobSpecs`, temperatures, or `NSims`, rerun `--prepare-only`
+or start the controller again to update this list; `--dry-run` does not write it.
+
+To inspect one child from the campaign root:
+
+```bash
+python /path/to/SGUSCHI/src/utils/SimulationSummary.py jobs/ZrC_low --stdout
+```
+
+For an ungrouped workspace or a summary run directly inside a child,
+`JobFolder` displays `-`. Refreshing an older summary rewrites it with the
+current columns; no run migration is needed.
+
+### Trajectories and logs
+
+These paths are relative to a **specification workspace**: the main workspace
+in single-specification mode, or a child such as `jobs/ZrC_low` in grouped mode.
+
+| Location | Contents |
+|---|---|
+| `xyz_files/873_1.xyz` | XYZ trajectory for temperature 873, replica 1 |
+| `xyz_files/RateAnalysis_873_1.csv` | Exported gas-management history |
+| `873_1/Dir_VolSearch/RateAnalysis.csv` | Active gas-management history |
+| `873_1/Dir_VolSearch/1/`, `2/`, … | Archived VASP segments |
+| `873_1/log.out` | Controller-script output and recovery messages |
+| `873_1/Dir_VolSearch/sim_log.tsv` | Lifecycle and submission events |
+
+Local trajectory filenames remain unchanged in grouped mode. Use each child's
+workspace as the root for repair and trajectory-resume utilities.
+
+## Resuming and extending runs
+
+### Resume after walltime or a failure
+
+After the previous controller has stopped, resubmit from the same workspace or
+campaign root:
+
+```bash
+sbatch OxidationMaster
+```
+
+Existing folders are preserved, completed trajectories are skipped, and pending
+trajectories are resumed. A definitely rejected initial VASP submission can be
+retried; recorded submissions are guarded against duplicate queuing. Inspect the
+trajectory's `log.out` and scheduler output to resolve the cause of a failure.
+
+If a running controller reports `AWAITING`, a later VASP submission was rejected
+and that trajectory is waiting for manual submission. Follow the recovery
+command printed in its `log.out`: from the affected `Dir_VolSearch`, submit
+`jobsub` using the configured scheduler command. The master can remain running.
+
+### Extend simulated time or add trajectories
+
+To extend a run stopped by `MaxRuntime`, raise that value in the specification's
+`OxParams` and resubmit. The controller compares the recorded simulated time
+against the new cap and reopens time-capped runs that are below it. An unchanged
+or lower cap leaves completed runs stopped, and naturally completed runs are
+not reopened. Unreadable runtime history is left stopped for inspection.
+
+Increase `NSims` or add entries to `Temperatures` to create more trajectories on
+the next preparation or submission. Existing trajectories keep their state.
+In grouped mode, these settings are independent for each child. Add another
+path to the campaign's `JobSpecs` to include a new specification. Removing a
+path leaves its files untouched and removes its runs from the expected list on
+the next preparation or startup.
+
+### Change inputs for a grouped specification
+
+On first preparation, the controller saves `.sguschi_inputs.json` in each child.
+On subsequent invocations it compares the scientific inputs against that record.
+
+| Change | How to apply it |
+|---|---|
+| Temperatures, `NSims`, or `MaxRuntime` | Edit the child's `OxParams`, then prepare or resubmit |
+| Composition, gas settings, `POSCAR`, `POTCAR`, `INCAR`, `KPOINTS`, `CovalentRadii`, or scientific `job.in` settings | Create a fresh specification directory containing only the new inputs; add it to `JobSpecs` |
+| Scheduler submission settings (`jobsub` or `vaspcmd`) | Changes are allowed; existing run copies must be updated explicitly if they need the changes |
+
+Do not copy old trajectories or the input record into a fresh specification.
+Setup does not overwrite existing run inputs: edited root templates affect newly
+prepared trajectories. Keep the input record with its workspace, and avoid
+editing scientific settings while a run is active; checks happen at controller
+startup. The record is also checked when a tracked child is launched directly.
+
+For a pre-existing workspace without a record, the first grouped invocation
 records its current inputs and reports that earlier changes cannot be verified.
-Keep the record with the workspace. Do not edit scientific settings while runs
-are active: checks happen when the controller starts. The record is also checked
-when a tracked child workspace is run directly. Legacy workspaces without an
-input record keep their previous input-editing behavior.
+Legacy workspaces without a record retain their previous input-editing behavior.
 
-This feature isolates existing O₂-control settings; it does not add a prescribed
-physical-flux controller or gas-mixture support. The material and geometry
-limitations below still apply.
+## Configuration reference
+
+### Input files
+
+Each specification needs the scientific and VASP workflow inputs below. Use one
+customized `OxidationMaster` per workspace or campaign. At a grouped campaign's
+top level, the only input files needed are `OxParams` and `OxidationMaster`.
+
+| File | Purpose |
+|---|---|
+| `OxParams` | Temperatures, replicas, gas-control settings, optional runtime cap |
+| `POSCAR` | Starting bulk supercell; preprocessing adds vacuum and O₂ |
+| `POTCAR` | Pseudopotentials matching POSCAR species order, with O last for inserted oxygen |
+| `INCAR` | VASP settings; required MD tags are listed below |
+| `KPOINTS` | VASP k-point mesh |
+| `job.in` | SLUSCHI control parameters and scheduler submission command |
+| `jobsub` | Cluster-specific VASP submission script |
+| `CovalentRadii` | Element radii for bond detection |
+| `OxidationMaster` | Scheduler script that runs the SGUSCHI controller; one per workspace or campaign |
+
+Supply a compact `POSCAR` without an existing gas region: preprocessing adds
+that region itself. It opens the largest interlayer gap; when the gap across the
+cell boundary is tied for largest (within `1e-12` in fractional coordinates), it
+prefers that boundary. This preserves the chosen surface planes of an ideal SQS
+whose vacuum has been removed. A distinctly larger interior gap still takes
+precedence, so a layer split across the periodic boundary remains intact.
+
+### OxParams
+
+Scientific keys are required in each specification's `OxParams` except for
+`MaxRuntime`. `JobSpecs` is optional. The parser supports `#` and `!` comments.
+
+| Key | Description |
+|---|---|
+| `JobSpecs` | Optional list of child workspaces; absent or `[]` disables grouping. A nonempty list makes the root file a campaign configuration; see [multiple specifications](#multiple-job-specifications-with-one-controller). |
+| `Temperatures` | List of simulation temperatures in K |
+| `NSims` | Number of trajectories **per temperature**, within this specification |
+| `GasRatio` | Fraction by which the x-axis is expanded to create the gas region |
+| `InitO2Count` | Initial number of O₂ molecules |
+| `AtomicRadiusTol` | Multiplier on the sum of covalent radii for bond detection |
+| `O2Tol` | O₂ count threshold, scaled by the current gas fraction during the run |
+| `OSmoothing` | Exponential smoothing factor α; the example uses `0.001` (heavily history-weighted). This key must be supplied. |
+| `MaxRuntime` | Optional simulated-time cap in ps; if omitted, no Python time cap is applied. Other stopping conditions and scheduler walltime still apply. |
+
+These settings control the existing O₂ count-based replenishment algorithm.
+They do not prescribe a physical impingement flux or enable gas mixtures.
 
 ### CovalentRadii
 
-Plain text file, one entry per line: `Element = radius_in_Angstroms`. Supports `#` and `!` comments.
+One entry per line, with radii in Å, for every element used by bond detection:
+
+```text
+Zr = 1.45
+C = 0.76
+O = 0.66
+```
+
+`#` and `!` comments are supported.
 
 ### INCAR (required settings)
 
 | Tag | Value | Reason |
-|-----|-------|--------|
-| `IBRION` | `0` | Molecular dynamics mode |
-| `ISIF` | `2` | Fixed cell shape; ions relax |
-| `NSW` | `80` | Steps per SLUSCHI cycle (overridden at runtime; do not change here) |
+|---|---|---|
+| `IBRION` | `0` | Molecular dynamics |
+| `ISIF` | `2` | Fixed lattice during each VASP segment; ions move |
+| `NSW` | `80` | Steps per cycle; enforced by `volsearch_cont` at runtime |
+
+Setup sets `TEBEG` and `TEEND` from the trajectory's temperature.
 
 ### job.in
 
-SLUSCHI volume-search configuration. Preconfigured settings work well.
+Start with [example/job.in](example/job.in). Set `vaspcmd` to your scheduler's
+submission command, such as `sbatch` or `qsub`; both SGUSCHI and SLUSCHI use it.
+Setup sets `temp` for each trajectory and sets `navg = 10000000` in the active
+`Dir_VolSearch/job.in`. Other SLUSCHI stopping and adjustment settings remain
+in effect. Changing `INCAR` or `job.in` alone does not change the enforced
+80-step gas-analysis interval.
 
-## Architecture
+## Developer information
 
-SGUSCHI wraps the SLUSCHI volume-search loop. `volsearch_cont` is a csh script that drives the full MD run. Each cycle it:
+### Architecture
 
-1. **Polls** for job completion (checks for `Total CPU` in OUTCAR every 60 s).
-2. **Extracts pressure/stress** from the finished OUTCAR: Pulay stress, full stress tensor, kinetic pressure from temperature and volume.
-3. **Predicts the next lattice** by running `DetermineSize.x` on the averaged pressure history (volume-search step; inherited from SLUSCHI).
-4. **Adjusts INCAR tags**: `AdjustPOTIM` (timestep), `AdjustNBANDS` (band count), `AdjustBMIX` (mixing parameter).
-5. **Archives the completed step**: creates a numbered folder (`1/`, `2/`, …), moves OUTCAR into it, copies INCAR/KPOINTS/POSCAR/OSZICAR, and touches an empty OUTCAR in place.
-6. **Builds the next POSCAR**: header and species lines from CONTCAR, new lattice vectors from `DetermineSize.x`, then atom positions and velocities from CONTCAR (i.e. the last MD snapshot becomes the starting point).
-7. **Calls `OxidationStep.py`**, which updates the gas environment (see below).
-8. **Submits the next VASP job** via the configured `vaspcmd`.
+`OxidationMaster` launches `src/SGUSCHI.py`, which resolves specifications,
+prepares new trajectories, reconciles runtime caps, submits initial VASP jobs,
+and starts one `volsearch_cont` process per pending trajectory. The controller
+also starts the campaign or workspace summary watcher.
 
+`volsearch_cont` is a C-shell script that invokes the compiled SLUSCHI helpers.
+For each MD segment it:
+
+1. Polls `OUTCAR` for completion (`Total CPU`, checked every 60 seconds).
+2. Extracts pressure and stress, including Pulay and kinetic contributions.
+3. Uses pressure history and `DetermineSize.x` to predict lattice changes.
+4. Adjusts INCAR settings such as `POTIM`, `NBANDS`, and `BMIX`.
+5. Archives the segment into a numbered folder and prepares the next POSCAR
+   from CONTCAR and the predicted lattice.
+6. Calls `OxidationStep.py` to detect/remove gases, update the O₂ count history,
+   conditionally insert O₂, and write POSCAR, rate analysis, and XYZ output.
+7. Submits the next VASP job unless a stopping condition or failure occurred.
+
+```text
+OxidationMaster
+└── SGUSCHI.py
+    ├── Resolve specifications and prepare/resume trajectories
+    ├── SimulationSummary.py watcher
+    └── volsearch_cont (one process per trajectory)
+        ├── Poll VASP, calculate pressure/lattice, archive segment
+        ├── OxidationStep.py
+        │   ├── Reads: POSCAR, archived OUTCAR, local OxParams and radii
+        │   └── Writes: POSCAR, RateAnalysis.csv, XYZ trajectory
+        └── Submit next VASP segment
 ```
-volsearch_cont (csh)
-    │  [startup] resolve sluschipath (env var sguschipath set by SGUSCHI.py, else ~/.sluschi.rc); set SIGMA/TEBEG/TEEND/NSW/SMASS in INCAR from job.in
-    │
-    └─ loop: poll OUTCAR → job done
-            ├─ compute pressure, run DetermineSize.x → lattice_predict.out
-            ├─ adjust INCAR (POTIM, NBANDS, BMIX)
-            ├─ archive step N: mkdir N/, mv OUTCAR N/, cp inputs, touch OUTCAR
-            ├─ build POSCAR: CONTCAR header + new lattice + CONTCAR positions/velocities
-            ├─ python OxidationStep.py
-            │       ├─ Reads:  POSCAR, {N}/OUTCAR, OxParams, CovalentRadii, RateAnalysis.csv
-            │       ├─ Calls OxidationAnalysis: gas detection, smoothing, O2 placement
-            │       └─ Writes: updated POSCAR, RateAnalysis.csv, XYZ trajectory
-            └─ submit next VASP job; advance step counter
-```
 
-If `OxidationStep.py` exits with a non-zero status, `volsearch_cont` halts immediately and writes a `sguschi_failed` marker file.
+SGUSCHI sets the `sguschipath` environment variable to the bundled SLUSCHI
+scripts; their fallback is `~/.sluschi.rc`. A nonzero `OxidationStep.py` exit
+halts the script: if `volsearch_is_done` exists, this is a clean stop; otherwise
+it records `sguschi_failed` and reports failure.
 
 ### Job state markers
 
-Each `Dir_VolSearch` carries marker files that record job state and drive recovery on
-resubmission. `SGUSCHI.py` writes the `job.*` markers; the rest are written by the run
-itself.
+These files live in each trajectory's `Dir_VolSearch`:
 
-| Marker | Written by | Meaning |
-|--------|-----------|---------|
-| `job.started` | `SGUSCHI.py` | ISO timestamp when `volsearch_cont` was launched |
-| `job.exit` | `SGUSCHI.py` | `volsearch_cont` exit code (`0` = done; `-1` = initial VASP submission failed) |
-| `job.killed` | `SGUSCHI.py` | walltime/SIGTERM kill message |
-| `volsearch_is_done` | `OxidationStep.py` | simulation reached its stopping condition |
-| `maxruntime_reached` | `OxidationStep.py` | `MaxRuntime` (ps) cap was hit |
-| `sguschi_failed` | `volsearch_cont` | `OxidationStep.py` raised an exception; run halted |
+| File | Written by | Purpose |
+|---|---|---|
+| `sim_log.tsv` | Controller and SLUSCHI script | Append-only `started`, `submitted`, `exit`, `killed`, and `await` events |
+| `job.exit` | Controller | Script exit code; `-1` for initial submission or launch failure |
+| `volsearch_is_done` | Simulation workflow | Trajectory reached a stopping condition |
+| `maxruntime_reached` | `OxidationStep.py` | Identifies a stop caused by the simulated-time cap |
+| `sguschi_failed` | SLUSCHI script | Workflow/helper failure; trajectory halted |
+| `.vasp_submitted_step` | Controller and SLUSCHI script | Submission guard for a numbered VASP segment |
+| `awaiting_manual_submission` | SLUSCHI script | Submission was rejected; waiting for operator recovery |
 
-On every resubmission `SGUSCHI.py` automatically clears stale `job.exit`, `job.killed`,
-and `sguschi_failed` markers, so a retried simulation is not misreported — you do **not**
-need to delete the `job.*` markers by hand. To extend a `MaxRuntime`-capped run, see the
-resuming note under [OxParams](#oxparams).
+Before relaunch, the controller clears stale `job.exit`, `sguschi_failed`, and
+`awaiting_manual_submission` markers and appends a new `started` event. The event
+history is retained. Current start/kill events are recorded in `sim_log.tsv`,
+rather than separate `job.started` and `job.killed` files. Runtime-cap markers
+are reconciled as described under [resuming](#resuming-and-extending-runs).
 
-## Known Limitations
+### Testing
 
-1. **Material system**: Void-fraction tracking uses Zr atoms as the solid reference. The code has been tested on **cubic Zr refractory materials** (e.g. ZrC, ZrN) in a pure O₂ environment only.
-2. **Structure geometry**: Cubic bulk structures only. The origin-shifting heuristic in `OxidationPreprocessing.py` assumes roughly equal inter-atom spacing; non-cubic and slab geometries are not supported.
-3. **Cell orientation**: The gas void region must lie along the **x-axis** (first lattice vector). Gas fraction tracking, O₂ placement, and surface area calculations all assume this orientation.
-4. **Gas addition**: Only **pure O₂** can be added. The O–O bond length is hardcoded to 1.2 Å and velocities are drawn from a Maxwell–Boltzmann distribution for two O atoms.
-5. **Gas removal**: Only molecules of **2–3 atoms** are detected (`MinimumComplexity=2`, `MaximumComplexity=3`). All detected non-O₂ molecules are removed each cycle.
-6. **Oxygen in base structure**: The base POSCAR must not contain oxygen atoms. This combination has not been tested.
-7. **Fixed cell**: Cell shape and volume are fixed during MD (`ISIF=2`). Variable-cell MD is not supported.
-8. **MD cycle length**: One Python cycle runs every **80 VASP MD steps**. This is enforced by `volsearch_cont` at runtime and cannot be changed by editing `INCAR` or `job.in` alone; the SLUSCHI script source must be modified.
-9. **Elemental masses**: Velocity initialisation covers O, C, Zr, and N only. Additional elements must be manually added to the mass dictionary in `src/workflow/OxidationAnalysis.py`.
+From the repository root, install the development tools and enter the test
+directory:
+
+```bash
+python -m pip install pytest black ruff
+cd src/test
+
+# Full suite: include the repository's PascalCase and lowercase test names
+python -m pytest . -q -o 'python_files=Test*.py' -o 'python_functions=Test* test_*'
+
+# One module
+python -m pytest TestJobSpecs.py -q -o 'python_functions=Test* test_*'
+```
+
+`conftest.py` adds `src/` to the import path. The explicit discovery options
+ensure that pytest collects both naming styles; a plain `pytest` invocation
+may miss tests. `RunTests.py` is an alternative convenience runner for the
+PascalCase tests.
+
+`TestPressureAvg.py` compiles and runs the `PressureAvg.f90` helper. Its tests
+are skipped if no `ifort`, `ifx`, or `gfortran` is on `PATH`. Controller tests mock
+scheduler calls; passing them does not constitute a live Slurm/PBS/VASP run.
+
+## Known limitations
+
+1. **Material system:** void-fraction tracking uses Zr atoms as the solid
+   reference. Testing has focused on cubic Zr refractory materials in pure O₂.
+2. **Structure geometry:** cubic bulk structures only. The origin-shifting
+   heuristic assumes roughly equal inter-atom spacing; non-cubic and slab
+   geometries are unsupported.
+3. **Cell orientation:** the gas region must lie along the x-axis (first lattice
+   vector). Void tracking, O₂ placement, and surface-area calculations assume it.
+4. **Gas addition:** only O₂ can be added. Its bond length is hardcoded to 1.2 Å,
+   with velocities sampled for two O atoms. Gas mixtures are unsupported.
+5. **Gas removal:** only molecules of 2–3 atoms are detected by the current
+   settings. All detected non-O₂ molecules are removed each cycle.
+6. **Oxygen in the starting structure:** use a base POSCAR without oxygen; the
+   preprocessing workflow has not been tested with oxygen already present.
+7. **Cell dynamics:** VASP segments use `ISIF=2`; variable-cell VASP MD is
+   unsupported. Inherited SLUSCHI logic can adjust lattice vectors between segments.
+8. **MD cycle length:** gas analysis runs every 80 VASP MD steps. Changing this
+   requires modifying `volsearch_cont`, not just the input files.
+9. **Elemental masses:** velocity initialization covers O, C, Zr, and N only.
+   Other elements require extending `src/workflow/OxidationAnalysis.py`.
+
+## Citation and license
+
+A publication DOI and project license have not yet been specified in this
+repository.

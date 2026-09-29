@@ -109,3 +109,48 @@ class TestAddVacuumNoSplitStructurePreservesLayers:
 
         MaterialLimit = 1.0 / Scale
         assert (NewPos["x"].values < MaterialLimit + 1e-9).all()
+
+
+class TestAddVacuumPreservesChosenInterface:
+    """Equal layer gaps must not change which decorated planes face the gas."""
+
+    @pytest.mark.parametrize("Axis", ["x", "y", "z"])
+    @pytest.mark.parametrize("GasRatio", [1.0, 2.0])
+    def test_equal_gaps_keep_original_boundary(self, Axis, GasRatio):
+        # Six ideal layers recovered from a centered 9a interface POSCAR.
+        # Decimal conversion makes an interior gap larger by roundoff alone.
+        LayerPositions = [
+            0.08333333333333326, 0.24999999999999978,
+            0.4166666666666665, 0.5833333333333335,
+            0.7499999999999998, 0.9166666666666665,
+        ]
+        Pos, Cell = MakeStructure([0.5] * len(LayerPositions))
+        Pos[Axis] = LayerPositions
+        Pos["Element"] = ["Zr", "C", "N", "Zr", "N", "C"]
+        OriginalPos, OriginalCell = Pos.copy(), Cell.copy()
+
+        NewPos, NewCell = Opp.AddVacuum(Pos, Cell, GasRatio=GasRatio, Axis=Axis)
+
+        # The same first and last decorated planes must remain the surfaces.
+        assert NewPos[Axis].idxmin() == Pos[Axis].idxmin()
+        assert NewPos[Axis].idxmax() == Pos[Axis].idxmax()
+        np.testing.assert_allclose(
+            NewPos[Axis].to_numpy() * (1.0 + GasRatio),
+            LayerPositions, rtol=0, atol=1e-12,
+        )
+        CartesianShift = (
+            NewPos[["x", "y", "z"]].to_numpy() @ NewCell.to_numpy()
+            - Pos[["x", "y", "z"]].to_numpy() @ Cell.to_numpy()
+        )
+        np.testing.assert_allclose(CartesianShift, 0.0, rtol=0, atol=1e-12)
+        pd.testing.assert_frame_equal(Pos, OriginalPos)
+        pd.testing.assert_frame_equal(Cell, OriginalCell)
+        assert NewPos["Element"].tolist() == Pos["Element"].tolist()
+
+    def test_distinctly_larger_interior_gap_is_still_used(self):
+        Pos, Cell = MakeStructure([0.05, 0.20, 0.60, 0.95])
+        NewPos, _ = Opp.AddVacuum(Pos, Cell, GasRatio=2.0)
+
+        # The midpoint of the unique largest gap is x=0.40.
+        Expected = ((Pos["x"].to_numpy() - 0.40) % 1.0) / 3.0
+        np.testing.assert_allclose(NewPos["x"], Expected, rtol=0, atol=1e-12)
