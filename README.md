@@ -141,24 +141,35 @@ inputs, temperatures, replica count, and optional runtime cap.
    campaign/
    ├── OxidationMaster
    ├── OxParams                     # JobSpecs list
-   └── jobs/
-       ├── ZrC_low/
-       │   ├── OxParams             # Scientific settings, temperatures, replicas
-       │   ├── POSCAR, POTCAR, INCAR, KPOINTS
-       │   ├── job.in, jobsub, CovalentRadii
-       │   ├── 873_1/Dir_VolSearch/  # Generated during preparation
-       │   └── xyz_files/           # This specification's trajectories
-       ├── ZrC_high/
-       │   └── ...
-       └── ZrN_low/
-           └── ...
+   ├── ZrC_low/
+   │   ├── OxParams                 # Scientific settings, temperatures, replicas
+   │   ├── POSCAR, POTCAR, INCAR, KPOINTS
+   │   ├── job.in, jobsub, CovalentRadii
+   │   ├── 873_1/Dir_VolSearch/      # Generated during preparation
+   │   └── xyz_files/               # This specification's trajectories
+   ├── ZrC_high/
+   │   └── ...
+   └── ZrN_low/
+       └── ...
    ```
 
 2. Put the specification list on one line in the top-level `OxParams`:
 
    ```python
-   JobSpecs = ["jobs/ZrC_low", "jobs/ZrC_high", "jobs/ZrN_low"]
+   JobSpecs = ["ZrC_low", "ZrC_high", "ZrN_low"]
    ```
+
+   Quotes are optional for simple paths, and quoted/unquoted entries can be
+   mixed. This is equivalent:
+
+   ```text
+   JobSpecs = [ZrC_low, ZrC_high, ZrN_low]
+   ```
+
+   Every unquoted entry is read as literal text: `1.20` and `001` retain their
+   exact spelling. This behavior applies only to `JobSpecs`; expressions and
+   malformed lists are rejected. Use quotes around parent paths containing
+   spaces or commas.
 
    `JobSpecs` is optional and disabled by default: omitting it or setting it to
    `[]` uses the single-workspace layout. When enabled, the top-level file only
@@ -178,9 +189,14 @@ inputs, temperatures, replica count, and optional runtime cap.
    sbatch OxidationMaster
    ```
 
-Use paths relative to the campaign, preferably with forward slashes. Directory
-basenames are specification IDs and must be unique, ignoring case. Names must
-start with a letter or digit and contain only letters, digits, dots, underscores,
+Use paths relative to the campaign, preferably with forward slashes. Workspaces
+can sit directly under the campaign root; a `jobs/` folder is optional. If you
+use one, include it in each path, e.g. `jobs/ZrC_low`. Every listed path must be
+an existing directory with the required inputs; a missing directory or a path
+pointing to a file stops the controller before preparation or submission.
+
+Directory basenames are specification IDs and must be unique, ignoring case.
+Names must start with a letter or digit and contain only letters, digits, dots, underscores,
 or hyphens. Directories must stay inside the campaign and cannot overlap.
 Nested `JobSpecs` lists are not supported. The campaign's `SimulationSummary`,
 `.simulation_summary`, and `logs` locations are reserved for controller output.

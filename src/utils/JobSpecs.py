@@ -33,16 +33,39 @@ class JobSpec:
 
 
 def ParseJobSpecs(Params: dict) -> List[str]:
-    """Absent or empty JobSpecs disables grouping; a nonempty list enables it."""
+    """Read quoted or bare directory names without interpreting bare values.
+
+    Absent or [] disables grouping. Only JobSpecs uses this literal-name syntax;
+    e.g. 1.20 remains "1.20", never a float reformatted as "1.2".
+    """
     Raw = Params.get("JobSpecs", "[]")
-    try:
-        Entries = ast.literal_eval(Raw)
-    except (ValueError, SyntaxError, TypeError) as Error:
-        raise ValueError("JobSpecs must be a list of directory strings, or [] to disable it") from Error
-    if not isinstance(Entries, list) or any(
-        not isinstance(Entry, str) or not Entry.strip() for Entry in Entries
-    ):
-        raise ValueError("JobSpecs must be a list of nonempty directory strings")
+    Message = (
+        "JobSpecs must be a bracketed, comma-separated list of nonempty directory "
+        "names, e.g. [ZrC_low, 'ZrC_high'], or [] to disable it"
+    )
+    if not isinstance(Raw, str):
+        raise ValueError(Message)
+    Raw = Raw.strip()
+    if not (Raw.startswith("[") and Raw.endswith("]")):
+        raise ValueError(Message)
+    Remaining = Raw[1:-1].strip()
+    # Quotes allow spaces/commas in parent paths; bare names use path characters.
+    Item = re.compile(r"""('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|[A-Za-z0-9_./\\-]+)\s*(?:,|$)""")
+    Entries = []
+    while Remaining:
+        Match = Item.match(Remaining)
+        if Match is None:
+            raise ValueError(Message)
+        Entry = Match.group(1)
+        if Entry[0] in "'\"":
+            try:
+                Entry = ast.literal_eval(Entry)  # Decode a single quoted string only.
+            except (ValueError, SyntaxError) as Error:
+                raise ValueError(Message) from Error
+        if not Entry.strip():
+            raise ValueError(Message)
+        Entries.append(Entry)
+        Remaining = Remaining[Match.end():].lstrip()
     return Entries
 
 
@@ -100,7 +123,7 @@ def LoadJobSpecs(WorkDir: Path) -> List[JobSpec]:
         if Root.relative_to(WorkDir).parts[0].casefold() in Reserved:
             raise ValueError("JobSpec overlaps a controller output location: {!r}".format(Entry))
         if not Root.is_dir():
-            raise ValueError("JobSpec directory does not exist: {}".format(Root))
+            raise ValueError("JobSpec directory does not exist or is not a directory: {}".format(Root))
         SpecId = Root.name
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", SpecId):
             raise ValueError("JobSpec directory name must use letters, digits, '.', '_' or '-': {}".format(SpecId))

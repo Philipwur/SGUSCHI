@@ -10,7 +10,7 @@ import SGUSCHI as Controller
 from utils import SimulationSummary as Summary
 from utils import StatusLog
 from utils.FolderUtils import TrajectoryRoot
-from utils.JobSpecs import LoadJobSpecs, INPUT_RECORD
+from utils.JobSpecs import LoadJobSpecs, ParseJobSpecs, INPUT_RECORD
 from workflow import VaspIO as Vio
 
 RUN_ORCHESTRATION = Controller.RunOrchestration
@@ -109,12 +109,70 @@ def TestGroupedPreparationIsIsolatedAndIdempotent(Campaign, monkeypatch):
     assert all(Row["Status"] == "NOT_STARTED" for Row in Exported)
 
 
-@pytest.mark.parametrize("Value", ["False", "True", "'jobs/low'", "[1]", "['']", "[", "{}"])
+@pytest.mark.parametrize("Value", ["False", "True", "'jobs/low'", "['']", "[", "{}"])
 def TestInvalidJobSpecsFailWithoutMutation(Campaign, monkeypatch, Value):
     (Campaign / "OxParams").write_text("JobSpecs = {}\n".format(Value), encoding="utf-8")
     Before = Snapshot(Campaign)
     assert Invoke(monkeypatch, Campaign) == 1
     assert Snapshot(Campaign) == Before
+
+
+@pytest.mark.parametrize("Raw,Expected", [
+    ("[]", []),
+    (" [  ] ", []),
+    ("[ZrC_0.5N_0.375, ZrC_0.75N_0.25_HF]", ["ZrC_0.5N_0.375", "ZrC_0.75N_0.25_HF"]),
+    ("[1.20, 001, 1e03, True, None]", ["1.20", "001", "1e03", "True", "None"]),
+    ("[jobs/low, 'jobs/high', \"ZrC_0.75\",]", ["jobs/low", "jobs/high", "ZrC_0.75"]),
+    (r"[jobs\low, jobs/high]", [r"jobs\low", "jobs/high"]),
+    ("['group, one/low', \"group two/high\"]", ["group, one/low", "group two/high"]),
+])
+def TestJobSpecNamesAreLiteralText(Raw, Expected):
+    assert ParseJobSpecs({"JobSpecs": Raw}) == Expected
+
+
+@pytest.mark.parametrize("Raw", [
+    "[low high]", "[low,,high]", "[,low]", "[low", "low]", "[low] junk",
+    "['low]", "[low']", "['low' 'high']", "['']", "['  ']", "[[low]]",
+    "[1 + 2]", "[str(1.20)]", "[{'low': 1}]", "[x for x in jobs]",
+    "[__import__('os').getcwd()]",
+])
+def TestMalformedJobSpecListsAreRejected(Raw):
+    with pytest.raises(ValueError, match="JobSpecs"):
+        ParseJobSpecs({"JobSpecs": Raw})
+
+
+def TestUnquotedWorkspacesCanLiveDirectlyUnderCampaign(tmp_path, monkeypatch):
+    Names = ["ZrC_0.5N_0.375", "ZrC_0.75N_0.25_HF", "1.20", "001"]
+    for Name in Names:
+        WriteWorkspace(tmp_path / Name)
+    Config = tmp_path / "OxParams"
+    Config.write_text("JobSpecs = [{}]\n".format(", ".join(Names)))
+    assert [Spec.Id for Spec in LoadJobSpecs(tmp_path)] == Names
+    assert Invoke(monkeypatch, tmp_path, Prepare=True) == 0
+    assert all((tmp_path / Name / "873_1" / "Dir_VolSearch" / "INCAR").is_file() for Name in Names)
+    assert not (tmp_path / "jobs").exists()
+    assert {Row.Simulation for Row in Summary.BuildSummary(tmp_path, Config, LiveIds=None)} == {
+        Name + "/873_1" for Name in Names
+    }
+
+
+@pytest.mark.parametrize("MakeFile", [False, True])
+def TestUnquotedMissingDirectoryFailsBeforePreparation(tmp_path, monkeypatch, capsys, MakeFile):
+    WriteWorkspace(tmp_path / "valid")
+    (tmp_path / "OxParams").write_text("JobSpecs = [valid, typo]\n")
+    if MakeFile:
+        (tmp_path / "typo").write_text("A file is not a workspace directory")
+    Before = Snapshot(tmp_path)
+    assert Invoke(monkeypatch, tmp_path, Prepare=True) == 1
+    assert Snapshot(tmp_path) == Before
+    Output = capsys.readouterr().out
+    assert "JobSpec directory" in Output and str(tmp_path / "typo") in Output
+
+
+def TestUnquotedCampaignIgnoresRootTemperaturesBeforePreparation(tmp_path):
+    Config = tmp_path / "OxParams"
+    Config.write_text("JobSpecs = [low, high]\nTemperatures = [999]\nNSims = 9\n")
+    assert Summary.ReadOxParamsSimulations(tmp_path, Config) == []
 
 
 @pytest.mark.parametrize("Entries", [

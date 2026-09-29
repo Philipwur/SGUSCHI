@@ -28,6 +28,7 @@ if _SrcDir not in sys.path:
     sys.path.append(_SrcDir)
 
 from utils.FolderUtils import NumericStepFolders
+from utils.JobSpecs import ParseJobSpecs
 from utils import StatusLog
 
 # Stuck detection: a step whose scheduler job is gone while its OUTCAR has not
@@ -133,8 +134,15 @@ def ReadOxParamsSimulations(RootDir: Path, OxParamsPath: Optional[Path]) -> List
 
     try:
         Text = OxParamsPath.read_text(encoding="utf-8", errors="ignore")
+        # JobSpecs may contain bare paths, so check it before parsing the legacy
+        # numeric settings as Python. Campaign labels come from expected.tsv.
+        JobSpecValues = re.findall(r"(?m)^[ \t]*JobSpecs[ \t]*=[ \t]*([^\r\n]*)", Text)
+        if JobSpecValues and ParseJobSpecs({
+            "JobSpecs": re.split(r"[#!]", JobSpecValues[-1], maxsplit=1)[0],
+        }):
+            return []
         Tree = ast.parse(Text, filename=str(OxParamsPath))
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, ValueError):
         return []
 
     Assignments = {}
@@ -142,16 +150,11 @@ def ReadOxParamsSimulations(RootDir: Path, OxParamsPath: Optional[Path]) -> List
         if not isinstance(Node, ast.Assign):
             continue
         for Target in Node.targets:
-            if isinstance(Target, ast.Name) and Target.id in {"Temperatures", "NSims", "JobSpecs"}:
+            if isinstance(Target, ast.Name) and Target.id in {"Temperatures", "NSims"}:
                 try:
                     Assignments[Target.id] = ast.literal_eval(Node.value)
                 except (TypeError, ValueError, SyntaxError):
                     pass
-
-    # A campaign's expected.tsv supplies the spec-qualified labels and paths.
-    # Legacy temperature settings left in its root OxParams are not extra runs.
-    if Assignments.get("JobSpecs"):
-        return []
 
     Temperatures = Assignments.get("Temperatures")
     NSims = Assignments.get("NSims")

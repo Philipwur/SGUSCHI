@@ -57,8 +57,10 @@ Omit `--stdout` to write the text and TSV summaries. See
 
 - `JobSpecs = []` is disabled by default. To control several different jobs from
   one `OxidationMaster`, create a campaign directory with a top-level `OxParams`
-  containing e.g. `JobSpecs = ["jobs/ZrC_low", "jobs/ZrN_high"]`. Copy the input
-  files in this example into each child directory and customize them separately.
+  containing e.g. `JobSpecs = [ZrC_low, ZrN_high]` (quotes are optional). These
+  workspaces can sit directly in the campaign root; no `jobs/` folder is needed.
+  Copy the input files in this example into each child directory and customize
+  them separately.
   Keep each child's `JobSpecs` empty. See
   [multiple specifications](../README.md#multiple-job-specifications-with-one-controller)
   for setup and directory rules.
