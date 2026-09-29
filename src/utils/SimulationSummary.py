@@ -94,15 +94,16 @@ SUMMARY_HEADERS = tuple(Field for Field, _ in SUMMARY_COLUMNS)
 SUMMARY_DISPLAY_HEADERS = tuple(Display for _, Display in SUMMARY_COLUMNS)
 
 
-def ReadExpectedSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
-    """Read optional expected labels written by a master process."""
+def ReadExpectedSimulations(RootDir: Path) -> Tuple[List[Tuple[str, Path]], bool]:
+    """Read expected labels and whether this is an authoritative campaign plan."""
     ExpectedFile = RootDir / EXPECTED_PATH
     if not ExpectedFile.exists():
-        return []
+        return [], False
 
     Rows: List[Tuple[str, Path]] = []
     with ExpectedFile.open("r", encoding="utf-8", errors="ignore", newline="") as File:
         Reader = csv.DictReader(File, delimiter="\t")
+        Grouped = "JobSpec" in (Reader.fieldnames or [])
         for Row in Reader:
             Label = (Row.get("Simulation") or "").strip()
             WorkDirRaw = (Row.get("WorkDir") or "").strip()
@@ -110,7 +111,7 @@ def ReadExpectedSimulations(RootDir: Path) -> List[Tuple[str, Path]]:
                 continue
             WorkDir = RootDir / WorkDirRaw if WorkDirRaw else RootDir / Label / "Dir_VolSearch"
             Rows.append((Label, WorkDir))
-    return Rows
+    return Rows, Grouped
 
 
 def ReadOxParamsSimulations(RootDir: Path, OxParamsPath: Optional[Path]) -> List[Tuple[str, Path]]:
@@ -129,11 +130,16 @@ def ReadOxParamsSimulations(RootDir: Path, OxParamsPath: Optional[Path]) -> List
         if not isinstance(Node, ast.Assign):
             continue
         for Target in Node.targets:
-            if isinstance(Target, ast.Name) and Target.id in {"Temperatures", "NSims"}:
+            if isinstance(Target, ast.Name) and Target.id in {"Temperatures", "NSims", "JobSpecs"}:
                 try:
                     Assignments[Target.id] = ast.literal_eval(Node.value)
                 except (TypeError, ValueError, SyntaxError):
                     pass
+
+    # A campaign's expected.tsv supplies the spec-qualified labels and paths.
+    # Legacy temperature settings left in its root OxParams are not extra runs.
+    if Assignments.get("JobSpecs"):
+        return []
 
     Temperatures = Assignments.get("Temperatures")
     NSims = Assignments.get("NSims")
@@ -169,7 +175,12 @@ def DiscoverSimulations(
     OxParamsPath: Optional[Path] = None,
 ) -> List[Tuple[str, Path]]:
     """Find simulation folders under RootDir."""
-    Expected = ReadExpectedSimulations(RootDir) + ReadOxParamsSimulations(RootDir, OxParamsPath)
+    Expected, Grouped = ReadExpectedSimulations(RootDir)
+    if Grouped:
+        # Only the controller's explicitly selected runs belong to a campaign.
+        # A spec root can itself look like '873_1'; do not mistake it for a run.
+        return sorted(Expected, key=lambda Item: NaturalSortKey(Item[0]))
+    Expected += ReadOxParamsSimulations(RootDir, OxParamsPath)
     Found = {}
     for Label, WorkDir in Expected:
         Found.setdefault(Label, WorkDir)

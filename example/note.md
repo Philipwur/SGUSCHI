@@ -43,6 +43,12 @@ Monitor progress from the workspace directory with:
 
 ## Notes
 
+- `JobSpecs = []` is disabled by default. To control several different jobs from
+  one `OxidationMaster`, create a campaign directory with a top-level `OxParams`
+  containing e.g. `JobSpecs = ["jobs/ZrC_low", "jobs/ZrN_high"]`. Copy the input
+  files in this example into each child directory and customize them separately.
+  Keep each child's `JobSpecs` empty. See the README for grouped resume rules.
+
 - The POSCAR should be a simple cubic structure. The x-axis will be expanded by
   `GasRatio` and filled with `InitO2Count` O₂ molecules during setup.
 - `vaspcmd` in `job.in` is read by both SLUSCHI (for VASP job submission) and

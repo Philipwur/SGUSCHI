@@ -246,6 +246,25 @@ def TestOxidationStepWritesOutputs(
     assert len(ParsedXyz["Positions"]) == 2
 
 
+def TestGroupedWorkspacesUseTheirOwnGasSettingsAndOutputs(TmpPath, MonkeyPatch):
+    """Identical local trajectory names must keep separate gas settings/history."""
+    Low = MakeWorkDir(TmpPath / "jobs" / "low")
+    High = MakeWorkDir(TmpPath / "jobs" / "high")
+    Config = High.parents[1] / "OxParams"
+    Config.write_text(Config.read_text().replace("O2Tol = 0.10", "O2Tol = 100.0"), encoding="utf-8")
+    MonkeyPatch.setattr(Ox.vio, "OutcarParser", lambda _: MakeOutcarData())
+    Ox.main(Low, TestCase=False)
+    LowHistory = (Low / "RateAnalysis.csv").read_bytes()
+    Ox.main(High, TestCase=False)
+    assert (Low / "RateAnalysis.csv").read_bytes() == LowHistory
+    assert Vio.ReadRateAnalysis(Low / "RateAnalysis.csv")["O2 Added"].iloc[-1] == 1
+    assert Vio.ReadRateAnalysis(High / "RateAnalysis.csv")["O2 Added"].iloc[-1] == 2
+    for Vsd in (Low, High):
+        assert (Vsd.parents[1] / "xyz_files" / "TrajA.xyz").exists()
+        assert (Vsd.parents[1] / "xyz_files" / "RateAnalysis_TrajA.csv").exists()
+    assert not (TmpPath / "xyz_files").exists()
+
+
 def TestMaxRuntimeStopsSimulation(
     TmpPath: Path,
     MonkeyPatch: pytest.MonkeyPatch,

@@ -1,3 +1,8 @@
+# Optional grouped workspaces. Off by default; omitting JobSpecs is equivalent.
+# To enable, list directories with their own complete inputs and OxParams.
+# JobSpecs = ["jobs/ZrC_low", "jobs/ZrC_high", "jobs/ZrN_low"]
+JobSpecs = []
+
 #Simulation Setup Parameters
 InitO2Count = 10 #Initial number of O2 molecules in the system.
 GasRatio = 2 #Solid to gas ratio (along x axis)

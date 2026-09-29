@@ -8,6 +8,8 @@ Usage (called by OxidationMaster):
     python /path/to/SGUSCHI/src/SGUSCHI.py [WorkDir] [--dry-run] [--prepare-only]
 
 WorkDir defaults to the current working directory (the simulation workspace).
+JobSpecs in its OxParams optionally lists child workspaces; absent or [] keeps
+the legacy single-workspace behavior. All specifications share one controller.
 
 Re-run behaviour:
     - Folders that already exist are never recreated or overwritten.
@@ -19,6 +21,7 @@ Re-run behaviour:
 import argparse
 import ast
 import csv
+import io
 import os
 import re
 import shlex
@@ -31,6 +34,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from utils import StatusLog
+from utils.JobSpecs import (
+    CheckScientificInputs, LoadJobSpecs, RecordScientificInputs, INPUT_RECORD, REQUIRED_KEYS,
+)
 
 # ---------------------------------------------------------------------------
 # Path constants — derived from this file's location (src/SGUSCHI.py)
@@ -90,17 +96,8 @@ def ReadOxParams(WorkDir: Path) -> dict:
         print("ERROR: could not import VaspIO: {}".format(E))
         sys.exit(1)
 
-    RequiredKeys = [
-        "Temperatures",
-        "NSims",
-        "GasRatio",
-        "InitO2Count",
-        "AtomicRadiusTol",
-        "O2Tol",
-        "OSmoothing",
-    ]
     try:
-        Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys=RequiredKeys)
+        Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys=REQUIRED_KEYS)
     except Exception as E:
         print("ERROR reading OxParams: {}".format(E))
         sys.exit(1)
@@ -267,7 +264,7 @@ def ReadSchedulerCmd(JobInDir: Path) -> List[str]:
 # Workspace setup
 # ---------------------------------------------------------------------------
 
-def RunSetup(WorkDir: Path, Params: dict, NewLabels: List[str]) -> None:
+def RunSetup(WorkDir: Path, Params: dict, NewLabels: List[str], JobNamePrefix: str = "") -> None:
     """Create simulation folders for NewLabels by calling SetupWorkspace."""
     if str(SRC_DIR) not in sys.path:
         sys.path.insert(0, str(SRC_DIR))
@@ -294,7 +291,9 @@ def RunSetup(WorkDir: Path, Params: dict, NewLabels: List[str]) -> None:
 
     print("Setting up {} new simulation folder(s)...".format(len(OnlySimIndices)))
     try:
-        LogLines = SetupWorkspace(WorkDir, Params, OnlySimIndices=OnlySimIndices)
+        LogLines = SetupWorkspace(
+            WorkDir, Params, OnlySimIndices=OnlySimIndices, JobNamePrefix=JobNamePrefix,
+        )
     except Exception as E:
         print("ERROR during workspace setup: {}".format(E))
         sys.exit(1)
@@ -308,13 +307,11 @@ def RunSetup(WorkDir: Path, Params: dict, NewLabels: List[str]) -> None:
 # ---------------------------------------------------------------------------
 
 def NeedsInitialVaspJob(VolSearchDir: Path) -> bool:
-    """Return True if the initial VASP job should be submitted.
+    """Submit a prepared or rejected first step, but never duplicate a queued job.
 
-    Uses the same completion signal as volsearch_cont: 'Total CPU' in OUTCAR.
-      - No OUTCAR           → job not yet submitted; submit
-      - OUTCAR empty        → job submitted or starting; do not re-submit
-      - OUTCAR has Total CPU → job finished; volsearch_cont will handle next submission
-      - Step folders exist  → volsearch_cont already advanced; do not submit
+    Any OUTCAR, numbered step folder, submission marker or recorded scheduler ID
+    is evidence of a previous launch. This also handles --prepare-only followed
+    by a normal invocation, where the directory exists but has never been queued.
     """
     # Check for numeric step folders (volsearch_cont has already run at least one cycle)
     try:
@@ -326,30 +323,27 @@ def NeedsInitialVaspJob(VolSearchDir: Path) -> bool:
     if HasStepFolders:
         return False
 
-    Outcar = VolSearchDir / "OUTCAR"
-    if not Outcar.exists():
-        return True                           # fresh folder, nothing submitted yet
-    try:
-        if Outcar.stat().st_size == 0:
-            return False                      # empty OUTCAR = job queued or running
-        Content = Outcar.read_text(encoding="utf-8", errors="ignore")
-        return "Total CPU" not in Content     # done iff Total CPU line is present
-    except OSError:
-        return False
+    return not (
+        (VolSearchDir / "OUTCAR").exists()
+        or (VolSearchDir / ".vasp_submitted_step").exists()
+        or StatusLog.LastEvent(VolSearchDir, "submitted") is not None
+    )
 
 
-def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> Set[str]:
-    """Submit the initial VASP job in each newly-created Dir_VolSearch that needs it.
+def SubmitInitialVaspJobs(
+    WorkDir: Path, Params: dict, NewLabels: List[str], LabelPrefix: str = "",
+) -> Set[str]:
+    """Submit the initial VASP job in each eligible Dir_VolSearch that needs it.
 
-    Returns the set of labels whose initial submission failed. Failed dirs are
-    marked with job.exit=-1 so the caller can exclude them from volsearch_cont
-    launch and avoid the master walltime being burnt waiting on a job that was
-    never queued.
+    Returns failed labels qualified by LabelPrefix. Failed dirs are marked with
+    job.exit=-1 so the caller can exclude them from volsearch_cont launch and
+    avoid waiting on a job that was never queued.
     """
     Failed: Set[str] = set()
     for Label, VolSearchDir in GetSimulationDirs(WorkDir, Params):
         if Label not in NewLabels:
             continue
+        Label = "{}/{}".format(LabelPrefix, Label) if LabelPrefix else Label
         if not VolSearchDir.exists():
             continue
         if not NeedsInitialVaspJob(VolSearchDir):
@@ -358,7 +352,13 @@ def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> 
         VaspCmd = ReadSchedulerCmd(VolSearchDir)
         Argv = VaspCmd + ["jobsub"]
         Display = " ".join(VaspCmd)
+        SubmissionMarker = VolSearchDir / ".vasp_submitted_step"
         try:
+            # Match volsearch_cont's queue guard. If interrupted during submission,
+            # wait for the possibly accepted job instead of duplicating it.
+            # Unlike advisory status markers, failure to persist this guard must
+            # prevent submission, otherwise a restart could enqueue a duplicate.
+            SubmissionMarker.write_text("1", encoding="utf-8")
             Result = subprocess.run(
                 Argv,
                 cwd=str(VolSearchDir),
@@ -370,6 +370,8 @@ def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> 
             if Result.stdout.strip():
                 print("  [{}]   {}".format(Label, Result.stdout.strip()))
             if Result.returncode != 0:
+                if "socket timed out" not in (Result.stdout + Result.stderr).lower():
+                    SubmissionMarker.unlink(missing_ok=True)
                 if Result.stderr.strip():
                     print("  [{}]   stderr: {}".format(Label, Result.stderr.strip()))
                 WriteMarker(VolSearchDir / "job.exit", "-1")
@@ -382,6 +384,7 @@ def SubmitInitialVaspJobs(WorkDir: Path, Params: dict, NewLabels: List[str]) -> 
                 if JobId:
                     StatusLog.Append(VolSearchDir, "SGUSCHI", "submitted", "1 {}".format(JobId))
         except FileNotFoundError:
+            SubmissionMarker.unlink(missing_ok=True)
             print("  [{}] ERROR: '{}' not on PATH — initial VASP submission failed".format(
                 Label, VaspCmd[0]))
             WriteMarker(VolSearchDir / "job.exit", "-1")
@@ -488,14 +491,14 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
         StatusLog.Append(Vsd, "SGUSCHI", "started", datetime.now().isoformat(timespec="seconds"))
         LogPath = Vsd.parent / "log.out"
         try:
-            LogFile = open(str(LogPath), "a", encoding="utf-8")
-            Proc = subprocess.Popen(
-                [str(VOLSEARCH_CONT)],
-                cwd=str(Vsd),
-                stdout=LogFile,
-                stderr=subprocess.STDOUT,
-                env=Env,
-            )
+            with open(str(LogPath), "a", encoding="utf-8") as LogFile:
+                Proc = subprocess.Popen(
+                    [str(VOLSEARCH_CONT)],
+                    cwd=str(Vsd),
+                    stdout=LogFile,
+                    stderr=subprocess.STDOUT,
+                    env=Env,
+                )
             Procs[Label] = (Proc, Vsd)
             print("  [{}] volsearch_cont started (pid {})".format(Label, Proc.pid))
         except OSError as E:
@@ -548,6 +551,23 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
 # Entry point
 # ---------------------------------------------------------------------------
 
+def WriteExpectedSimulations(
+    WorkDir: Path, Simulations: List[Tuple[str, Path]], Grouped: bool = False,
+) -> None:
+    """Give the summary the controller's IDs and exact paths, including new runs."""
+    Buffer = io.StringIO()
+    Writer = csv.writer(Buffer, delimiter="\t", lineterminator="\n")
+    Writer.writerow(["Simulation", "WorkDir"] + (["JobSpec"] if Grouped else []))
+    for Label, Vsd in Simulations:
+        Row = [Label, Vsd.relative_to(WorkDir).as_posix()]
+        Writer.writerow(Row + ([Label.split("/", 1)[0]] if Grouped else []))
+    Expected = WorkDir / ".simulation_summary" / "expected.tsv"
+    Expected.parent.mkdir(parents=True, exist_ok=True)
+    Temporary = Expected.with_suffix(".tsv.tmp")
+    Temporary.write_text(Buffer.getvalue(), encoding="utf-8")
+    Temporary.replace(Expected)
+
+
 def main() -> int:
     # Ensure non-ASCII status characters (em-dashes, arrows) survive on shells
     # whose default encoding is not UTF-8 (notably Windows PowerShell, cp1252).
@@ -567,14 +587,36 @@ def main() -> int:
 
     print("SGUSCHI — workspace: {}".format(WorkDir))
 
-    Params = ReadOxParams(WorkDir)
+    # Resolve and validate every spec before changing markers, preparing folders,
+    # or submitting any jobs. A missing/bad later spec must not launch earlier ones.
+    try:
+        Specs = LoadJobSpecs(WorkDir)
+        InputRecords = {
+            Spec.Id: CheckScientificInputs(Spec) for Spec in Specs
+            if Spec.Id or (Spec.Root / INPUT_RECORD).exists()
+        }
+    except (OSError, ValueError, SyntaxError, TypeError) as Error:
+        print("ERROR: {}".format(Error))
+        return 1
 
-    # Reopen any time-capped simulation whose achieved runtime is now below a
-    # raised MaxRuntime, so a bare resubmit continues it without hand-deleting
-    # markers. Runs before classification so reopened sims count as pending.
-    ReopenTimeCappedSimulations(WorkDir, Params, DryRun=Args.dry_run)
-
-    States = ClassifySimulations(WorkDir, Params)
+    States: Dict[str, str] = {}
+    AllDirs: List[Tuple[str, Path]] = []
+    LocalStates = {}
+    for Spec in Specs:
+        if Spec.Id:
+            print("JobSpec {} — {}".format(Spec.Id, Spec.Root))
+        Reopened = ReopenTimeCappedSimulations(
+            Spec.Root, Spec.Params, DryRun=Args.dry_run or Args.prepare_only,
+        )
+        SpecStates = ClassifySimulations(Spec.Root, Spec.Params)
+        # A dry run must show the same pending plan without deleting markers.
+        for Label in Reopened:
+            SpecStates[Label] = "pending"
+        LocalStates[Spec.Id] = SpecStates
+        States.update((Spec.RunId(Label), State) for Label, State in SpecStates.items())
+        AllDirs.extend(
+            (Spec.RunId(Label), Vsd) for Label, Vsd in GetSimulationDirs(Spec.Root, Spec.Params)
+        )
 
     NewLabels = [L for L, S in States.items() if S == "new"]
     PendingLabels = [L for L, S in States.items() if S in ("new", "pending")]
@@ -587,7 +629,7 @@ def main() -> int:
         if NewLabels:
             print("Would create folders: {}".format(", ".join(NewLabels)))
         PendingDirsDry = [
-            (L, Vsd) for L, Vsd in GetSimulationDirs(WorkDir, Params)
+            (L, Vsd) for L, Vsd in AllDirs
             if L in PendingLabels
         ]
         if PendingDirsDry:
@@ -595,29 +637,43 @@ def main() -> int:
                 ", ".join(L for L, _ in PendingDirsDry)))
         return 0
 
-    # Setup new folders
-    FailedLabels: Set[str] = set()
+    # Prepare all specs before submitting any jobs. Keep all process launches in
+    # one orchestration call so different specifications run concurrently.
+    try:
+        for Spec in Specs:
+            if Spec.Id:
+                RecordScientificInputs(Spec, InputRecords[Spec.Id])
+            NewLocal = [L for L, S in LocalStates[Spec.Id].items() if S == "new"]
+            if NewLocal:
+                RunSetup(Spec.Root, Spec.Params, NewLocal, JobNamePrefix=Spec.Id)
+        WriteExpectedSimulations(WorkDir, AllDirs, Grouped=bool(Specs[0].Id))
+    except OSError as Error:
+        print("ERROR preparing workspaces: {}".format(Error))
+        return 1
+
     if Args.prepare_only:
         if NewLabels:
-            RunSetup(WorkDir, Params, NewLabels)
             print("Prepared {} new simulation folder(s).".format(len(NewLabels)))
         else:
             print("No new simulation folders to prepare.")
         print("--prepare-only: skipping VASP job submission and volsearch_cont launch.")
         return 0
 
-    if NewLabels:
-        RunSetup(WorkDir, Params, NewLabels)
-        FailedLabels = SubmitInitialVaspJobs(WorkDir, Params, NewLabels)
-        if FailedLabels:
-            print("Initial VASP submission failed in: {}".format(", ".join(sorted(FailedLabels))))
-            print("  → these directories will NOT run volsearch_cont this session.")
+    FailedLabels: Set[str] = set()
+    for Spec in Specs:
+        Eligible = [L for L, S in LocalStates[Spec.Id].items() if S in ("new", "pending")]
+        FailedLabels.update(SubmitInitialVaspJobs(
+            Spec.Root, Spec.Params, Eligible, LabelPrefix=Spec.Id,
+        ))
+    if FailedLabels:
+        print("Initial VASP submission failed in: {}".format(", ".join(sorted(FailedLabels))))
+        print("  → these directories will NOT run volsearch_cont this session.")
 
     # Collect pending dirs (after setup, new folders are now on disk).
     # Exclude any label whose initial VASP submission failed — otherwise
     # volsearch_cont would sit polling an OUTCAR that never arrives.
     PendingDirs = [
-        (L, Vsd) for L, Vsd in GetSimulationDirs(WorkDir, Params)
+        (L, Vsd) for L, Vsd in AllDirs
         if L in PendingLabels and L not in FailedLabels
     ]
 
@@ -629,7 +685,7 @@ def main() -> int:
         return 0
 
     print("Starting volsearch_cont for {} simulation(s)...".format(len(PendingDirs)))
-    RC = RunOrchestration(WorkDir, Params, PendingDirs)
+    RC = RunOrchestration(WorkDir, {}, PendingDirs)
     # Treat the overall run as failed if any initial submission also failed.
     return 1 if (RC != 0 or FailedLabels) else 0
 

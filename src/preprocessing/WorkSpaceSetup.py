@@ -83,12 +83,14 @@ def SetupWorkspace(
     WorkDir: Path,
     Params: dict,
     OnlySimIndices: Optional[List[Tuple[int, int]]] = None,
+    JobNamePrefix: str = "",
 ) -> List[str]:
     """Set up simulation folders from OxParams. Returns log lines.
 
     OnlySimIndices: optional list of (Temp, SimIdx) pairs to set up.
     If None, sets up all combinations from Params.
     Per-folder idempotent: folders where Dir_VolSearch already exists are skipped.
+    JobNamePrefix distinguishes specifications in scheduler job listings.
     """
     RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub", "CovalentRadii"]
     EnsureFilesExist(WorkDir, RequiredFiles)
@@ -175,6 +177,8 @@ def SetupWorkspace(
 
             # Prepare and write jobsub with updated job name
             FolderTag = MakeFolderTag(FolderName)
+            if JobNamePrefix:
+                FolderTag = "{}_{}".format(JobNamePrefix, FolderTag)
             JobsubContent = UpdateJobName(JobsubBaseContent, FolderTag)
             WriteTextFile(SimDir / "jobsub", JobsubContent)
 
