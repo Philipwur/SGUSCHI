@@ -368,10 +368,12 @@ def TestSummaryOutputsAreWritten(RootDir: Path) -> None:
     Text = (RootDir / "SimulationSummary").read_text(encoding="utf-8")
     Tsv = (RootDir / "logs" / "SimulationSummary.tsv").read_text(encoding="utf-8")
 
-    assert "Simulation" in Text
+    assert "JobFolder" in Text
+    assert "Trajectory" in Text
     assert "873_1" in Text
     assert (RootDir / "logs").is_dir()
-    assert "Simulation\tStatus" in Tsv
+    assert Tsv.startswith("JobFolder\tTrajectory\tStatus\t")
+    assert Tsv.splitlines()[1].split("\t")[:3] == ["-", "873_1", "DONE"]
     assert "Time_ps" in Text
     assert "SimTime_fs" not in Tsv
     assert "O2Added" in Text
@@ -484,6 +486,7 @@ def TestExistingSummaryDocumentHeadersAreMigrated(RootDir: Path) -> None:
     TsvText = TsvPath.read_text(encoding="utf-8")
     TextText = TextPath.read_text(encoding="utf-8")
     for Document in (TsvText, TextText):
+        assert "JobFolder" in Document and "Trajectory" in Document
         assert "O2Added" in Document and "TotalO2Added" not in Document
         assert "GasRemoved" in Document and "MoleculesRemoved" not in Document
         assert "Time_ps" in Document and "SimTime_ps" not in Document

@@ -1,5 +1,6 @@
 """Grouped jobs: real workspace preparation and isolated, mocked scheduling."""
 
+import csv
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,6 +94,19 @@ def TestGroupedPreparationIsIsolatedAndIdempotent(Campaign, monkeypatch):
     assert Snapshot(Campaign) == Before
     Rows = Summary.BuildSummary(Campaign, Campaign / "OxParams", LiveIds=None)
     assert {Row.Simulation for Row in Rows} == {"low/873_1", "high/873_1"}
+    Summary.WriteOutputs(Campaign, Rows)
+    Text = (Campaign / Summary.SUMMARY_TXT).read_text(encoding="utf-8")
+    assert Text.splitlines()[2].split()[:3] == ["JobFolder", "Trajectory", "Status"]
+    assert {tuple(Line.split()[:2]) for Line in Text.splitlines()[4:]} == {
+        ("low", "873_1"), ("high", "873_1"),
+    }
+    with (Campaign / Summary.SUMMARY_TSV).open(encoding="utf-8", newline="") as File:
+        Exported = list(csv.DictReader(File, delimiter="\t"))
+    assert len(Exported) == 2
+    assert {(Row["JobFolder"], Row["Trajectory"]) for Row in Exported} == {
+        ("low", "873_1"), ("high", "873_1"),
+    }
+    assert all(Row["Status"] == "NOT_STARTED" for Row in Exported)
 
 
 @pytest.mark.parametrize("Value", ["False", "True", "'jobs/low'", "[1]", "['']", "[", "{}"])

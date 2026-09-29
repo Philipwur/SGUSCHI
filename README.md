@@ -167,6 +167,22 @@ so repair and trajectory-resume tools can be used with each specification's
 directory as their workspace. Removing a specification from the list leaves its
 files untouched and removes it from the campaign's expected run list.
 
+The root `SimulationSummary` text file and `logs/SimulationSummary.tsv` contain
+one row per trajectory, with separate `JobFolder` and `Trajectory` columns:
+
+```text
+JobFolder  Trajectory  Status       ...
+ZrC_low    873_1       NOT_STARTED  ...
+ZrC_low    873_2       NOT_STARTED  ...
+ZrC_high   873_1       NOT_STARTED  ...
+ZrC_high   873_2       NOT_STARTED  ...
+```
+
+`JobFolder` is the specification directory's basename; `Trajectory` is its local
+temperature/replica folder name. For an ungrouped workspace or a summary run
+directly inside one specification, `JobFolder` displays `-`. Refreshing the
+summary rewrites both outputs with this format; no run migration is needed.
+
 **Resuming grouped runs:** the controller saves `.sguschi_inputs.json` in each
 specification directory on first preparation. On later invocations it rejects
 changes to scientific `OxParams` settings, the contents of `POSCAR`, `POTCAR`,

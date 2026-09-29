@@ -58,6 +58,7 @@ SIMULATION_RE = re.compile(r"^\d+_\d+$")
 class SimulationRow:
     """One row in the root-level simulation summary."""
 
+    # Keep the qualified identity for callers; split it only for presentation.
     Simulation: str
     Status: str
     LastUpdate: str
@@ -72,11 +73,22 @@ class SimulationRow:
     Failed: str
     Detail: str
 
+    @property
+    def JobFolder(self) -> str:
+        """Specification folder name, or '-' for an ungrouped workspace."""
+        return self.Simulation.rpartition("/")[0] or "-"
 
-# Each entry is (field_name, display_header). Field names must be valid Python
-# identifiers and must match the SimulationRow dataclass fields.
+    @property
+    def Trajectory(self) -> str:
+        """Local trajectory name, e.g. 873_1, without the specification prefix."""
+        return self.Simulation.rpartition("/")[2]
+
+
+# Each entry is (attribute_name, display_header). Attributes can be dataclass
+# fields or presentation properties on SimulationRow.
 SUMMARY_COLUMNS: Tuple[Tuple[str, str], ...] = (
-    ("Simulation",       "Simulation"),
+    ("JobFolder",        "JobFolder"),
+    ("Trajectory",       "Trajectory"),
     ("Status",           "Status"),
     ("LastUpdate",       "Age"),
     ("Folders",          "Folders"),
