@@ -401,6 +401,19 @@ while ($stopflag == 0)
       endif
     endif
     
+    # Save the completed segment's inputs before adapting the next INCAR.
+    mkdir $nstep
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: failed to create step folder $nstep.
+      touch $failure_marker
+      exit 1
+    endif
+    cp INCAR KPOINTS POSCAR OSZICAR $nstep
+    if ( $? != 0 ) then
+      echo FATAL volsearch_cont: failed to copy inputs into step folder $nstep.
+      touch $failure_marker
+      exit 1
+    endif
     echo --- ADJUST INCAR TAGS ---
     $sluschipath/AdjustPOTIM
     if ( $? != 0 ) then
@@ -413,18 +426,6 @@ while ($stopflag == 0)
     $sluschipath/AdjustBMIX
     if ( $? != 0 ) then
       echo "WARNING volsearch_cont: AdjustBMIX failed; keeping current BMIX."
-    endif
-    mkdir $nstep
-    if ( $? != 0 ) then
-      echo FATAL volsearch_cont: failed to create step folder $nstep.
-      touch $failure_marker
-      exit 1
-    endif
-    cp INCAR KPOINTS POSCAR OSZICAR $nstep
-    if ( $? != 0 ) then
-      echo FATAL volsearch_cont: failed to copy inputs into step folder $nstep.
-      touch $failure_marker
-      exit 1
     endif
     set nkpts_value = `grep NKPTS OUTCAR | awk '{print $4}'`
     if ( "$nkpts_value" == "" ) then

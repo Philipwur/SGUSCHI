@@ -511,16 +511,22 @@ def RunOrchestration(WorkDir: Path, Params: dict, PendingDirs: List[Tuple[str, P
         except OSError:
             pass  # daemon is optional; don't abort if it fails
 
-    # Wait for all processes
+    # Check local child processes only; no scheduler queries or file scans.
     AllPassed = LaunchFailures == 0
-    for Label, (Proc, Vsd) in Procs.items():
-        RC = Proc.wait()
-        WriteMarker(Vsd / "job.exit", str(RC))
-        StatusLog.Append(Vsd, "SGUSCHI", "exit", str(RC))
-        Status = "OK" if RC == 0 else "FAILED (exit {})".format(RC)
-        print("  [{}] volsearch_cont finished — {}".format(Label, Status))
-        if RC != 0:
-            AllPassed = False
+    while Procs:
+        for Label, (Proc, Vsd) in list(Procs.items()):
+            RC = Proc.poll()
+            if RC is None:
+                continue
+            WriteMarker(Vsd / "job.exit", str(RC))
+            StatusLog.Append(Vsd, "SGUSCHI", "exit", str(RC))
+            Status = "OK" if RC == 0 else "FAILED (exit {})".format(RC)
+            print("  [{}] volsearch_cont finished — {}".format(Label, Status))
+            if RC != 0:
+                AllPassed = False
+            del Procs[Label]
+        if Procs:
+            time.sleep(30)
 
     return 0 if AllPassed else 1
 

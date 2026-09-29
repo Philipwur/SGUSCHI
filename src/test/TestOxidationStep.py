@@ -311,3 +311,41 @@ def TestMaxRuntimeNotReachedDoesNotStop(
     Ox.main(WorkDir, TestCase=False)
 
     assert not (WorkDir / "volsearch_is_done").exists()
+
+
+@pytest.mark.parametrize("SegmentTimes,CapPs", [
+    ([2.0], 0.002),          # Stop exactly at the cap.
+    ([2.0, 2.0], 0.004),    # Include the earlier segment once.
+    ([2.0, 2.0], 0.003),    # Finish the segment that crosses the cap.
+    ([1.0, 3.0, 2.0], 0.006),  # Allow durations to change with adaptive POTIM.
+])
+def TestMaxRuntimeUsesActualCumulativeTime(TmpPath, MonkeyPatch, capsys, SegmentTimes, CapPs):
+    """A trajectory must continue until its recorded simulated time reaches the cap."""
+    WorkDir = MakeWorkDir(TmpPath)
+    Root = WorkDir.parents[1]
+    with (Root / "OxParams").open("a", encoding="utf-8") as Config:
+        Config.write(f"MaxRuntime = {CapPs}\n")
+
+    ExpectedTimes = [0.0]
+    for Step, Duration in enumerate(SegmentTimes, start=1):
+        StepDir = WorkDir / str(Step)
+        StepDir.mkdir(exist_ok=True)
+        (StepDir / "OUTCAR").touch()
+        OutcarData = MakeOutcarData()
+        OutcarData["TimesFs"] = [Duration / 2, Duration]
+        MonkeyPatch.setattr(Ox.vio, "OutcarParser", lambda _: OutcarData)
+        ExpectedTimes.append(ExpectedTimes[-1] + Duration)
+        AtCap = ExpectedTimes[-1] / 1000 >= CapPs
+
+        if AtCap:
+            with pytest.raises(SystemExit) as ExcInfo:
+                Ox.main(WorkDir, TestCase=False)
+            assert ExcInfo.value.code == 1
+            assert f"({ExpectedTimes[-1] / 1000:.4f} ps)" in capsys.readouterr().out
+        else:
+            Ox.main(WorkDir, TestCase=False)
+
+        assert (WorkDir / "volsearch_is_done").exists() == AtCap
+        assert (WorkDir / "maxruntime_reached").exists() == AtCap
+        for RatePath in (WorkDir / "RateAnalysis.csv", Root / "xyz_files" / "RateAnalysis_TrajA.csv"):
+            assert Vio.ReadRateAnalysis(RatePath)["Time (fs)"].tolist() == ExpectedTimes

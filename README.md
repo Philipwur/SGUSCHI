@@ -385,7 +385,7 @@ Scientific keys are required in each specification's `OxParams` except for
 | `AtomicRadiusTol` | Multiplier on the sum of covalent radii for bond detection |
 | `O2Tol` | O₂ count threshold, scaled by the current gas fraction during the run |
 | `OSmoothing` | Exponential smoothing factor α; the example uses `0.001` (heavily history-weighted). This key must be supplied. |
-| `MaxRuntime` | Optional simulated-time cap in ps; if omitted, no Python time cap is applied. Other stopping conditions and scheduler walltime still apply. |
+| `MaxRuntime` | Optional simulated-time cap in ps, checked against cumulative time after each completed MD segment. The final segment can overshoot the cap. If omitted, no Python time cap is applied. Other stopping conditions and scheduler walltime still apply. |
 
 These settings control the existing O₂ count-based replenishment algorithm.
 They do not prescribe a physical impingement flux or enable gas mixtures.
@@ -461,9 +461,10 @@ For each MD segment it:
 1. Polls `OUTCAR` for completion (`Total CPU`, checked every 60 seconds).
 2. Extracts pressure and stress, including Pulay and kinetic contributions.
 3. Uses pressure history and `DetermineSize.x` to predict lattice changes.
-4. Adjusts INCAR settings such as `POTIM`, `NBANDS`, and `BMIX`.
-5. Archives the segment into a numbered folder and prepares the next POSCAR
-   from CONTCAR and the predicted lattice.
+4. Copies the completed segment's inputs into its numbered folder, then adjusts
+   the working INCAR (`POTIM`, `NBANDS`, and `BMIX`) for the next segment.
+5. Archives OUTCAR and prepares the next POSCAR from CONTCAR and the predicted
+   lattice. The archived INCAR retains the settings used for the completed segment.
 6. Calls `OxidationStep.py` to detect/remove gases, update the O₂ count history,
    conditionally insert O₂, and write POSCAR, rate analysis, and XYZ output.
 7. Submits the next VASP job unless a stopping condition or failure occurred.
@@ -485,6 +486,11 @@ SGUSCHI sets the `sguschipath` environment variable to the bundled SLUSCHI
 scripts; their fallback is `~/.sluschi.rc`. A nonzero `OxidationStep.py` exit
 halts the script: if `volsearch_is_done` exists, this is a clean stop; otherwise
 it records `sguschi_failed` and reports failure.
+
+The master checks its local `volsearch_cont` processes every 30 seconds and
+records each exit independently, even while other trajectories are still running.
+This check uses only local process status; it adds no scheduler queries or file
+scans. The summary watcher retains its separate 60-second refresh interval.
 
 ### Job state markers
 

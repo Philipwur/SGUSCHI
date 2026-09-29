@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
+import subprocess
+
+import pytest
 
 
 RootDir = Path(__file__).resolve().parents[2]
@@ -81,6 +85,48 @@ def TestVolsearchContWarnsOnIncarAdjustmentFailures() -> None:
     assert "FATAL volsearch_cont: AdjustPOTIM failed" not in Text
     assert "FATAL volsearch_cont: AdjustNBANDS failed" not in Text
     assert "FATAL volsearch_cont: AdjustBMIX failed" not in Text
+
+
+def TestVolsearchContArchivesCompletedInputsBeforeAdjustment(tmp_path):
+    """Run the archive/adjustment block with helpers that change the next INCAR."""
+    Csh = shutil.which("csh") or shutil.which("tcsh")
+    if Csh is None:
+        pytest.skip("C-shell interpreter is not available")
+
+    Originals = {
+        "INCAR": "POTIM = 1.0\nNBANDS = 96\nBMIX = 0.63\n",
+        "KPOINTS": "original k-points\n",
+        "POSCAR": "original structure\n",
+        "OSZICAR": "completed segment energies\n",
+    }
+    for Name, Content in Originals.items():
+        (tmp_path / Name).write_text(Content, encoding="utf-8")
+    (tmp_path / "OUTCAR").write_text("completed segment output\n", encoding="utf-8")
+    Helpers = tmp_path / "helpers"
+    Helpers.mkdir()
+    for Tag, Value in (("POTIM", "1.2"), ("NBANDS", "112"), ("BMIX", "0.4")):
+        Helper = Helpers / ("Adjust" + Tag)
+        Helper.write_text(
+            f'#!{Csh} -f\n'
+            'if ( ! -s OUTCAR || ! -s OSZICAR ) exit 1\n'
+            f"sed -i '/^{Tag} /d' INCAR\n"
+            f'echo "{Tag} = {Value}" >> INCAR\n',
+            encoding="utf-8",
+        )
+        Helper.chmod(0o755)
+
+    Text = ReadScript("volsearch_cont")
+    Start = min(Text.index("    mkdir $nstep"), Text.index("    echo --- ADJUST INCAR TAGS ---"))
+    Block = Text[Start:Text.index("    set nkpts_value", Start)]
+    Script = tmp_path / "archive.csh"
+    Script.write_text('set nstep = 12\nset failure_marker = sguschi_failed\n'
+                      'set sluschipath = "$cwd/helpers"\n' + Block, encoding="utf-8")
+    Result = subprocess.run([Csh, "-f", str(Script)], cwd=tmp_path, capture_output=True, text=True)
+    assert Result.returncode == 0, Result.stdout + Result.stderr
+    assert not (tmp_path / "sguschi_failed").exists()
+    for Name, Content in Originals.items():
+        assert (tmp_path / "12" / Name).read_text(encoding="utf-8") == Content
+    assert (tmp_path / "INCAR").read_text(encoding="utf-8") == "POTIM = 1.2\nNBANDS = 112\nBMIX = 0.4\n"
 
 
 def TestAdjustNbandsFallsBackWithoutCshExpressionErrors() -> None:

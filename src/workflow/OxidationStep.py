@@ -326,9 +326,10 @@ def main(WorkDir = None, TestCase = False):
     #----------------------------- File Management ----------------------------
     
     GasRemovedStr = CreateGassesRemovedStr(Gasses)
+    CumulativeTime_fs = RateAnalysis['Time (fs)'].iloc[-1] + SimTime
     
     NewRateRow = [
-        SimTime + RateAnalysis['Time (fs)'].iloc[-1],
+        CumulativeTime_fs,
         O2Count,
         SmoothedO2Count,
         O2Added + RateAnalysis['O2 Added'].iloc[-1],
@@ -360,7 +361,7 @@ def main(WorkDir = None, TestCase = False):
         vio.WritePoscar(WorkDir, Position, CellDim, Velocity)
 
         if MaxRuntime_ps is not None:
-            CumulativeTime_ps = (SimTime + RateAnalysis['Time (fs)'].iloc[-1]) / 1000.0
+            CumulativeTime_ps = CumulativeTime_fs / 1000.0
             if CumulativeTime_ps >= MaxRuntime_ps:
                 (WorkDir / "volsearch_is_done").write_text("", encoding="utf-8")
                 (WorkDir / "maxruntime_reached").write_text("", encoding="utf-8")

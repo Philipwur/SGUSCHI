@@ -511,8 +511,8 @@ def TestOrchestrationStartsBothSpecsBeforeWaiting(Campaign, monkeypatch):
         pid = 100
         def __init__(self, Name):
             self.Name = Name
-        def wait(self):
-            Events.append(("wait", self.Name))
+        def poll(self):
+            Events.append(("poll", self.Name))
             return 1 if self.Name == "low" else 0
     def Launch(Argv, **Kwargs):
         Name = Path(Kwargs["cwd"]).parents[1].name
@@ -524,9 +524,51 @@ def TestOrchestrationStartsBothSpecsBeforeWaiting(Campaign, monkeypatch):
     monkeypatch.setattr(Controller, "SIMULATION_SUMMARY_SCRIPT", Campaign / "absent_summary.py")
     Dirs = [(Name + "/873_1", Campaign / "jobs" / Name / "873_1" / "Dir_VolSearch") for Name in ("low", "high")]
     assert RUN_ORCHESTRATION(Campaign, {}, Dirs) == 1
-    assert Events == [("launch", "low"), ("launch", "high"), ("wait", "low"), ("wait", "high")]
+    assert Events == [("launch", "low"), ("launch", "high"), ("poll", "low"), ("poll", "high")]
     assert (Dirs[0][1] / "job.exit").read_text() == "1"
     assert (Dirs[1][1] / "job.exit").read_text() == "0"
+
+
+@pytest.mark.parametrize("LaterExit", [0, 7, -15])
+def TestOrchestrationRecordsExitsWhileEarlierSpecStillRuns(Campaign, monkeypatch, LaterExit):
+    """An out-of-order exit is recorded once, without blocking or scheduler queries."""
+    Dirs = [(Name + "/873_1", Campaign / "jobs" / Name / "873_1" / "Dir_VolSearch")
+            for Name in ("low", "high")]
+    for _, Vsd in Dirs:
+        Vsd.mkdir(parents=True)
+    Polls = {"low": 0, "high": 0}
+    Sleeps = []
+
+    class Process:
+        pid = 100
+        def __init__(self, Name):
+            self.Name = Name
+        def poll(self):
+            Polls[self.Name] += 1
+            if self.Name == "high":
+                return LaterExit
+            return 0 if Polls[self.Name] == 3 else None
+
+    def Sleep(Seconds):
+        Sleeps.append(Seconds)
+        assert len(Sleeps) <= 2, "Controller did not finish monitoring"
+        assert not (Dirs[0][1] / "job.exit").exists()
+        assert (Dirs[1][1] / "job.exit").read_text() == str(LaterExit)
+        assert StatusLog.LastEvent(Dirs[1][1], "exit").Detail == str(LaterExit)
+
+    monkeypatch.setattr(Controller.subprocess, "Popen",
+                        lambda Argv, **Kwargs: Process(Path(Kwargs["cwd"]).parents[1].name))
+    monkeypatch.setattr(Controller.os, "access", lambda *Args: True)
+    monkeypatch.setattr(Controller.signal, "signal", lambda *Args: None)
+    monkeypatch.setattr(Controller.time, "sleep", Sleep)
+    monkeypatch.setattr(Controller, "SIMULATION_SUMMARY_SCRIPT", Campaign / "absent_summary.py")
+
+    assert RUN_ORCHESTRATION(Campaign, {}, Dirs) == int(LaterExit != 0)
+    assert Sleeps == [30, 30]
+    assert Polls == {"low": 3, "high": 1}
+    assert (Dirs[0][1] / "job.exit").read_text() == "0"
+    for _, Vsd in Dirs:
+        assert len([Event for Event in StatusLog.ReadEvents(Vsd) if Event.Event == "exit"]) == 1
 
 
 def TestSignalHandlerTracksBothSpecs(Campaign):
