@@ -16,6 +16,7 @@ Edit the files in this folder before running anything:
 | `KPOINTS` | K-point mesh |
 | `job.in` | SLUSCHI config; **set `vaspcmd`** to your scheduler command (e.g. `sbatch`) |
 | `CovalentRadii` | Element radii in Å used by the gas detection algorithm |
+| `jobsub` | Set VASP resources, modules and launch command for your cluster |
 | `OxidationMaster` | Set `#SBATCH` tags, `module load` lines, and the path to `SGUSCHI.py` |
 
 **Step 2 — Submit**
@@ -23,8 +24,9 @@ Edit the files in this folder before running anything:
     sbatch OxidationMaster
 
 SGUSCHI.py (called by OxidationMaster on the compute node) will:
+
 1. Create simulation folder trees from OxParams (Temperatures × NSims), including
-   [initial INCAR preparation](../README.md#incar-required-settings)
+   [initial INCAR preparation](../docs/usage.md#incar-required-settings)
 2. Submit the initial VASP job in each `Dir_VolSearch` using `vaspcmd` from `job.in`
 3. Start `volsearch_cont` in all folders and run until completion or walltime
 
@@ -38,8 +40,9 @@ To extend simulations or recover after a walltime failure, simply resubmit:
 
     sbatch OxidationMaster
 
-Existing folders and finished simulations are skipped automatically.
-See [resuming and extending runs](../README.md#resuming-and-extending-runs) for
+Existing folders are preserved and unfinished simulations resume. Completed
+simulations stay stopped unless their `MaxRuntime` cap is raised.
+See [resuming and extending runs](../docs/usage.md#resuming-and-extending-runs) for
 runtime caps and grouped-input restrictions.
 
 **Step 4 — Monitor results**
@@ -51,7 +54,7 @@ Monitor progress from the workspace directory with:
     python /path/to/SGUSCHI/src/utils/SimulationSummary.py . --stdout
 
 Omit `--stdout` to write the text and TSV summaries. See
-[monitoring and outputs](../README.md#monitoring-and-outputs) for columns and paths.
+[monitoring and outputs](../docs/usage.md#monitoring-and-outputs) for columns and paths.
 
 ## Notes
 
@@ -62,7 +65,7 @@ Omit `--stdout` to write the text and TSV summaries. See
   Copy the input files in this example into each child directory and customize
   them separately.
   Keep each child's `JobSpecs` empty. See
-  [multiple specifications](../README.md#multiple-job-specifications-with-one-controller)
+  [multiple specifications](../docs/usage.md#multiple-job-specifications-with-one-controller)
   for setup and directory rules.
 
 - The POSCAR should be a simple cubic structure. The x-axis will be expanded by
@@ -70,4 +73,5 @@ Omit `--stdout` to write the text and TSV summaries. See
 - `vaspcmd` in `job.in` is read by both SLUSCHI (for VASP job submission) and
   SGUSCHI.py (for the initial VASP job). Make sure it matches your cluster scheduler.
 - `navg` in `job.in` is automatically set to 10000000 in each `Dir_VolSearch` so
-  that `volsearch_cont` runs indefinitely until the walltime is reached.
+  that the pressure-history window is large; runtime caps, SLUSCHI stopping
+  conditions and scheduler walltime still apply.
