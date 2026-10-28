@@ -82,7 +82,8 @@ def TestDerivationKeepsMdPrecisionAndOriginals(Spec):
     Root, Params = Spec
     Before = {P.name: P.read_bytes() for P in Root.iterdir()}
     Plan = B.BuildInputs(Root, Params)
-    assert Plan["files"]["KPOINTS_OPT"] == (Root / "KPOINTS").read_text()
+    assert Plan["files"]["KPOINTS"] == (Root / "KPOINTS").read_text()
+    assert "job.in" not in Plan["files"] and "KPOINTS_OPT" not in Plan["files"]
     Values = B.IncarValues(Plan["files"]["INCAR"])
     assert Values["ENCUT"] == "400" and Values["ISIF"] == "8"
     assert Values["IBRION"] == "2" and Values["NSW"] == "200"
@@ -97,6 +98,40 @@ def TestDerivationKeepsMdPrecisionAndOriginals(Spec):
     B.Prepare(Root, Plan)
     assert all((Root / N).read_bytes() == V for N, V in Before.items())
     assert not list(Root.glob("*/Dir_VolSearch"))
+    assert not (Root / B.NAME / "job.in").exists()
+    assert not (Root / B.NAME / "KPOINTS_OPT").exists()
+
+
+def TestRelaxationPatchesOnlyControlTagsAndKeepsComments(Spec):
+    Root, Params = Spec
+    Original = "# IBRION=0 is a comment\nencut=400; PREC=Normal ! supplied precision\n"
+    Original += "ibrion=0; ISMEAR=-1; TEBEG=973 # shared line\nIBRION=1\n"
+    Original += "SMASS=0; SIGMA=.2064\nEDIFF=1e-4\nNCORE=8"
+    (Root / "INCAR").write_text(Original)
+    Text = B.BuildInputs(Root, Params)["files"]["INCAR"]
+    assert "encut=400; PREC=Normal ! supplied precision\n" in Text
+    assert "# IBRION=0 is a comment\n" in Text and "# shared line" in Text
+    assert "ISMEAR=-1" in Text and "SIGMA=.2064" in Text
+    assert "EDIFF=1e-4\nNCORE=8\n" in Text
+    assert B.IncarValues(Text)["IBRION"] == "2"
+    assert Text.count("IBRION = 2") == 1
+    assert not {"TEBEG", "SMASS"} & B.IncarValues(Text).keys()
+    assert (Root / "INCAR").read_text() == Original
+
+
+def TestSchedulerUpdateNeedsNoStagedJobIn(Spec):
+    Root, Params = Spec
+    Plan = B.BuildInputs(Root, Params)
+    B.Prepare(Root, Plan)
+    (Root / "job.in").write_text("temp=873\npress=0\nvaspcmd=sbatch --parsable\n")
+    Updated = B.BuildInputs(Root, Params)
+    assert Updated["fingerprint"] == Plan["fingerprint"]
+    B.Prepare(Root, Updated)
+    assert B.ReadJson(Root / B.NAME / "Inputs.json")["command"] == ["sbatch", "--parsable"]
+    assert not (Root / B.NAME / "job.in").exists()
+    (Root / "job.in").write_text("press=3\nvaspcmd=sbatch --parsable\n")
+    with pytest.raises(ValueError, match="inputs changed"):
+        B.CheckPlan(Root, B.BuildInputs(Root, Params))
 
 
 def TestWalltimeAndNoTemperatureSpecificRelaxation(Spec):

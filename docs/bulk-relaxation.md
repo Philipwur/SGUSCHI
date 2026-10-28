@@ -56,6 +56,11 @@ ISIF=8 relaxes positions and volume at fixed cell shape and requires
 Supported inputs are positive orthogonal oxygen-free bulk cells without frozen
 atoms. Subsequent MD preparation does not carry selective-dynamics constraints.
 
+INCAR edits use the same text helper as MD initialization, retaining comments
+and unrelated assignments. KPOINTS keeps its ordinary filename throughout the
+managed relaxation. job.in is read from the original workspace; its pressure
+target and submission command are recorded without staging another copy.
+
 POTCAR blocks are selected by element in POSCAR order; the oxygen potential
 appended for oxidation is excluded. Original files are never overwritten.
 The copied jobsub retains modules, executable and resources, with a relaxation
@@ -109,7 +114,7 @@ to write only relaxation inputs.
 specification/
 ├── POSCAR, INCAR, KPOINTS, POTCAR, job.in, jobsub  # original inputs
 ├── BulkRelaxation/
-│   ├── POSCAR, INCAR, KPOINTS_OPT, POTCAR, job.in, jobsub
+│   ├── POSCAR, INCAR, KPOINTS, POTCAR, jobsub
 │   ├── Inputs.json, Status.json, optunitcell.log
 │   ├── Accepted.POSCAR
 │   └── Dir_OptUnitCell/
@@ -157,6 +162,7 @@ equilibration or determine a finite-temperature equilibrium lattice parameter.
 
 The existing optunitcell owns the two-pass sequence via its --sguschi entry
 point; its standalone invocation retains legacy behaviour.
+The standalone path still uses its original KPOINTS_OPT convention.
 utils/BulkRelaxation.py derives inputs, handles one pass, validates results and
 publishes the accepted geometry before workspace setup.
 

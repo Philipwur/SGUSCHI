@@ -1,7 +1,6 @@
 """Prepare the first INCAR before submission; never reset a started trajectory."""
 
 import math
-import re
 import sys
 from pathlib import Path
 
@@ -10,6 +9,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import StatusLog
+from utils.Incar import PatchIncar
 
 
 def NeedsInitialVaspJob(VolSearchDir: Path) -> bool:
@@ -41,24 +41,8 @@ def InitializeIncar(IncarPath: Path, Temp) -> None:
         "NSW": "80",
         "SMASS": "0",
     }
-    ReplaceTag = re.compile(r"\s*(?:" + "|".join(Settings) + r"|NBANDS)\s*=", re.I)
     Original = IncarPath.read_text(encoding="utf-8")
-    Lines = []
-    for Line in Original.splitlines(keepends=True):
-        Parts = re.split(r"([#!].*)", Line.rstrip("\r\n"), maxsplit=1)
-        Assignments = Parts[0].split(";")
-        Kept = [Part for Part in Assignments if not ReplaceTag.match(Part)]
-        if Kept == Assignments:
-            Lines.append(Line)
-        else:
-            Code = ";".join(Kept).rstrip()
-            Comment = Parts[1] if len(Parts) > 1 else ""
-            if Code.strip() or Comment:
-                Lines.append(Code + (" " if Code and Comment else "") + Comment + "\n")
-    Text = "".join(Lines)
-    if Text and not Text.endswith("\n"):
-        Text += "\n"
-    Text += "".join("{} = {}\n".format(Tag, Value) for Tag, Value in Settings.items())
+    Text = PatchIncar(Original, Settings, Remove=("NBANDS",))
     if Text == Original:
         return
     Temporary = IncarPath.with_name(IncarPath.name + ".sguschi.tmp")

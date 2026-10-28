@@ -27,6 +27,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils import StatusLog
+from utils.Incar import IncarValues, PatchIncar
 
 NAME = "BulkRelaxation"
 SCRIPT = Path(__file__).resolve().parents[1] / "dependencies/SLUSCHI_mod/optunitcell"
@@ -111,16 +112,6 @@ def Lock(Root):
                 yield
             finally:
                 fcntl.flock(Handle, fcntl.LOCK_UN)
-
-
-def IncarValues(Text):
-    Result = {}
-    for Line in Text.splitlines():
-        for Part in re.split(r"[#!]", Line, maxsplit=1)[0].split(";"):
-            if "=" in Part:
-                Key, Value = Part.split("=", 1)
-                Result[Key.strip().upper()] = Value.strip()
-    return Result
 
 
 def Number(Value, Name, Positive=True):
@@ -224,7 +215,8 @@ def BuildInputs(SpecRoot, Params):
     Steps = Number(Params.get("RelaxMaxSteps", 200), "RelaxMaxSteps")
     if Steps != int(Steps):
         raise ValueError("RelaxMaxSteps must be an integer")
-    Values = IncarValues((SpecRoot / "INCAR").read_text())
+    OriginalIncar = (SpecRoot / "INCAR").read_text()
+    Values = IncarValues(OriginalIncar)
     # Preserve electronic settings, including omitted VASP defaults. Read NELM
     # only so output validation uses the same iteration cap as the calculation.
     Nelm = Number(Values.get("NELM", 60), "NELM")
@@ -233,13 +225,13 @@ def BuildInputs(SpecRoot, Params):
     Nelm = int(Nelm)
     JobParams = ReadKeyValueFile(SpecRoot / "job.in")
     Target = Number(Values.get("PSTRESS", JobParams.get("press", 0)), "PSTRESS/press", Positive=False)
-    for Key in ("TEBEG", "TEEND", "SMASS", "MDALGO", "LANGEVIN_GAMMA", "LANGEVIN_GAMMA_L", "PMASS", "ANDERSEN_PROB", "NBLOCK", "KBLOCK", "NPACO", "APACO"):
-        Values.pop(Key, None)
+    MdTags = ("TEBEG", "TEEND", "SMASS", "MDALGO", "LANGEVIN_GAMMA", "LANGEVIN_GAMMA_L",
+              "PMASS", "ANDERSEN_PROB", "NBLOCK", "KBLOCK", "NPACO", "APACO")
     # Only convert MD to fresh, two-pass ionic/volume relaxation. NWRITE >= 2
     # supplies the force/stress diagnostics used by acceptance checks.
-    Values.update(IBRION="2", ISIF="8", POTIM="0.3", EDIFFG=str(-Force),
-                  NSW=str(int(Steps)), PSTRESS=str(Target), ISTART="0", ICHARG="2",
-                  NWRITE=str(max(int(Values.get("NWRITE", 2)), 2)))
+    Settings = dict(IBRION="2", ISIF="8", POTIM="0.3", EDIFFG=str(-Force),
+                    NSW=str(int(Steps)), PSTRESS=str(Target), ISTART="0", ICHARG="2",
+                    NWRITE=str(max(int(Values.get("NWRITE", 2)), 2)))
     Kpoints = (SpecRoot / "KPOINTS").read_text()
     Command = shlex.split(JobParams.get("vaspcmd", "sbatch"))
     if not Command or Path(Command[0]).name not in ("sbatch", "qsub"):
@@ -268,11 +260,11 @@ def BuildInputs(SpecRoot, Params):
                 Job = re.sub(r"walltime=[^,\s]+", "walltime=" + Walltime, Job)
             else:
                 Job = Job.replace("\n", "\n#PBS -l walltime=" + Walltime + "\n", 1)
-    Files = {"POSCAR": StructureText(Structure), "INCAR": "".join(K + " = " + V + "\n" for K, V in Values.items()),
+    Files = {"POSCAR": StructureText(Structure), "INCAR": PatchIncar(OriginalIncar, Settings, Remove=MdTags),
              "POTCAR": BulkPotential((SpecRoot / "POTCAR").read_text(), Species),
-             "KPOINTS_OPT": Kpoints, "jobsub": Job, "job.in": (SpecRoot / "job.in").read_text()}
+             "KPOINTS": Kpoints, "jobsub": Job}
     Config = {"force": Force, "pressure": Pressure, "steps": int(Steps), "target_pressure": Target, "nelm": Nelm}
-    Scientific = {Name: Digest(Files[Name].encode()) for Name in ("POSCAR", "INCAR", "POTCAR", "KPOINTS_OPT")}
+    Scientific = {Name: Digest(Files[Name].encode()) for Name in ("POSCAR", "INCAR", "POTCAR", "KPOINTS")}
     Scientific["config"] = Config
     Fingerprint = Digest(json.dumps(Scientific, sort_keys=True).encode())
     return {"files": Files, "fingerprint": Fingerprint, "config": Config, "command": Command,
@@ -299,9 +291,8 @@ def Prepare(SpecRoot, Plan):
         CheckPlan(SpecRoot, Plan)
         if (Root / "Inputs.json").exists():
             # Resource changes affect only a pass that has not been prepared.
-            for Name in ("jobsub", "job.in"):
-                if (Root / Name).read_text() != Plan["files"][Name]:
-                    AtomicText(Root / Name, Plan["files"][Name])
+            if (Root / "jobsub").read_text() != Plan["files"]["jobsub"]:
+                AtomicText(Root / "jobsub", Plan["files"]["jobsub"])
             Inputs = ReadJson(Root / "Inputs.json")
             if Inputs["command"] != Plan["command"]:
                 Inputs["command"] = Plan["command"]
@@ -311,7 +302,7 @@ def Prepare(SpecRoot, Plan):
             AtomicText(Root / Name, Text)
         (Root / "Dir_OptUnitCell").mkdir(exist_ok=True)
         Inputs = {K: V for K, V in Plan.items() if K != "files"}
-        Inputs["generated_hashes"] = {N: FileHash(Root / N) for N in ("POSCAR", "INCAR", "POTCAR", "KPOINTS_OPT")}
+        Inputs["generated_hashes"] = {N: FileHash(Root / N) for N in ("POSCAR", "INCAR", "POTCAR", "KPOINTS")}
         WriteJson(Root / "Inputs.json", Inputs)
         SetStatus(Root, "prepared", 0, "Inputs prepared; no VASP job submitted")
 
@@ -470,9 +461,8 @@ def RunPass(Root, Pass):
             if Pass == 2:
                 VerifyCompleted(Root, 1)
                 ValidatePass(Root, 1)
-            for Name in ("INCAR", "POTCAR", "jobsub"):
+            for Name in ("INCAR", "KPOINTS", "POTCAR", "jobsub"):
                 shutil.copyfile(Root / Name, Folder / Name)
-            shutil.copyfile(Root / "KPOINTS_OPT", Folder / "KPOINTS")
             Source = Root / "POSCAR" if Pass == 1 else Root / "Dir_OptUnitCell/pass1/CONTCAR"
             AtomicText(Folder / "POSCAR", StructureText(ReadStructure(Source)))
             Record = {"state": "submitting", "submitted_at": time.time(), "pass": Pass, "command": Inputs["command"],

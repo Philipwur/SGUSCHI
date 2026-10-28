@@ -25,6 +25,8 @@ MD state markers; see [automatic bulk relaxation](bulk-relaxation.md).
 trajectory reconstruction share it, and the controller prepares all eligible
 first jobs before submitting any. `volsearch_cont` calls the same guarded helper
 for standalone startup; it leaves submitted/running and historical inputs alone.
+`src/utils/Incar.py` supplies the common text editing used by this preparation
+and bulk relaxation, preserving comments and unrelated settings.
 
 `volsearch_cont` is a C-shell script that invokes the compiled SLUSCHI helpers.
 For each MD segment it:
