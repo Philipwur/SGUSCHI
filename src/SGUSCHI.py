@@ -73,7 +73,7 @@ def ParseArgs() -> argparse.Namespace:
     Parser.add_argument(
         "--prepare-only",
         action="store_true",
-        help="Prepare simulation folders and initial INCAR settings; do not submit VASP jobs or launch "
+        help="Prepare pending bulk-relaxation inputs or MD folders; submit no VASP jobs or launch "
              "volsearch_cont (safe to run on a login node)",
     )
     Parser.add_argument(

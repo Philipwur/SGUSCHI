@@ -13,8 +13,8 @@ The following files must exist before running this script:
 
 1. OxParams        → Contains simulation parameters with keys:
                      - AtomicRadiusTol
-                     - TargetPP
-                     - PPSmoothing
+                     - O2Tol
+                     - OSmoothing
                      - InitO2Count
                      - GasRatio
                      - Temperatures
@@ -34,6 +34,7 @@ import re
 import shutil
 import ast
 import sys
+import subprocess
 from typing import List, Optional, Tuple
 
 # --- Make imports location-independent ---
@@ -221,23 +222,15 @@ def SetupWorkspace(
 
 
 def PrepareWorkingDirectory():
+    """Standalone compatibility entry: use the controller's preparation path.
 
-    WorkDir = Path.cwd()
-
-    RequiredKeys = [
-        'Temperatures',
-        'NSims',
-        'GasRatio',
-        'InitO2Count'
-    ]
-
-    OxParamsPath = WorkDir / "OxParams"
-    Params = vio.ReadKeyValueFile(OxParamsPath, RequiredKeys=RequiredKeys)
-
-    LogLines = SetupWorkspace(WorkDir, Params)
-
-    WriteTextFile(WorkDir / "log.out", "\n".join(LogLines) + "\n")
+    This stages pending bulk relaxation before any oxidation folders, handles
+    grouped specifications and applies the same input/restart checks. The
+    controller calls SetupWorkspace directly, so this does not recurse.
+    """
+    Controller = Path(__file__).resolve().parents[1] / "SGUSCHI.py"
+    return subprocess.call([sys.executable, str(Controller), str(Path.cwd()), "--prepare-only"])
 
 
 if __name__ == "__main__":
-    PrepareWorkingDirectory()
+    raise SystemExit(PrepareWorkingDirectory())

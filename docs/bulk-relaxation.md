@@ -71,6 +71,21 @@ sbatch OxidationMaster
 ```
 
 Normal execution continues automatically to oxidation after acceptance.
+Preparation is optional: the normal SGUSCHI command performs it as needed.
+The standalone preprocessing/WorkSpaceSetup.py entry point delegates to the
+same preparation-only flow, including grouped campaigns:
+
+| State | Preparation stops at |
+|---|---|
+| bulk, no accepted result yet | BulkRelaxation/Dir_OptUnitCell, once per specification |
+| off or omitted | temperature_replica/Dir_VolSearch, ready for initial MD |
+| bulk, result already accepted | temperature_replica/Dir_VolSearch, using the accepted bulk |
+
+Preparation never submits jobs. Normal execution submits both relaxation passes
+when enabled, then creates the MD folders and launches oxidation automatically.
+Use a controller allocation with enough walltime for queue waits, both passes
+and MD; RelaxWalltime controls the individual VASP relaxation jobs separately.
+
 For a review checkpoint, have the controller call:
 
 ```bash

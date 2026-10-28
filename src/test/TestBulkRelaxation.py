@@ -252,6 +252,30 @@ def TestDryRunAndPrepareOnlyNeverSubmit(Spec, monkeypatch):
     assert not list(Root.glob("*/Dir_VolSearch"))
 
 
+@pytest.mark.parametrize("Mode", ["bulk", "off"])
+@pytest.mark.parametrize("Grouped", [False, True])
+def TestStandalonePreparationStopsAtCorrectStage(tmp_path, Mode, Grouped):
+    Workspace = tmp_path / "workspace"
+    SpecRoot = Workspace / "material" if Grouped else Workspace
+    WriteSpec(SpecRoot)
+    Config = SpecRoot / "OxParams"
+    Config.write_text(Config.read_text().replace("Relaxation=bulk", "Relaxation=" + Mode))
+    if Grouped:
+        (Workspace / "OxParams").write_text("JobSpecs=[material]\n")
+    Result = subprocess.run([sys.executable, str(SGUSCHI.WORKSPACE_SETUP_MODULE)],
+                            cwd=Workspace, capture_output=True, text=True, encoding="utf-8", timeout=30)
+    assert Result.returncode == 0, Result.stdout + Result.stderr
+    if Mode == "bulk":
+        assert (SpecRoot / B.NAME / "Dir_OptUnitCell").is_dir()
+        assert B.ReadJson(SpecRoot / B.NAME / "Status.json")["state"] == "prepared"
+        assert not list(SpecRoot.glob("*/Dir_VolSearch"))
+        assert not list(SpecRoot.rglob("Pass.json"))
+    else:
+        assert not (SpecRoot / B.NAME).exists()
+        assert len(list(SpecRoot.glob("*/Dir_VolSearch/INCAR"))) == 4
+        assert not list(SpecRoot.rglob(".vasp_submitted_step"))
+
+
 def TestPreflightAllSpecsBeforeAnyMutation(tmp_path):
     A, C = tmp_path / "a", tmp_path / "c"
     Pa, Pc = WriteSpec(A), WriteSpec(C)
