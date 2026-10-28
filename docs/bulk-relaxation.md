@@ -6,12 +6,21 @@ replica. It is disabled by default and cannot be retrofitted onto trajectories.
 
 ## Configure
 
-Add `Relaxation = bulk` to the specification's OxParams, not the campaign root.
-No separate templates are required.
+Relaxation is optional. In a single workspace, set it in OxParams; in a grouped
+campaign, set it separately in each specification's OxParams.
+
+```text
+Relaxation = off    # Skip optunitcell; prepare MD from the supplied POSCAR.
+```
+
+Omitting the parameter has the same effect. Change its value to `bulk` to run
+optunitcell before MD. No separate templates or additional enable/disable flag
+are required. These choices apply when preparing a workspace; changing the mode
+does not cancel an already submitted job or change existing MD trajectories.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| Relaxation | off | Set bulk to enable |
+| Relaxation | off | Optional: bulk runs optunitcell; off skips it |
 | RelaxForceTol | 0.02 | Maximum final force, eV/Å |
 | RelaxPressureTol | 1.0 | Allowed residual pressure relative to press, kbar |
 | RelaxMaxSteps | 200 | Ionic steps per pass |

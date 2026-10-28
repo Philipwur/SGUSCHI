@@ -94,6 +94,8 @@ For individual parameters, see the [configuration reference](docs/usage.md#confi
 Optional [automatic bulk relaxation](docs/bulk-relaxation.md) runs the bundled
 SLUSCHI `optunitcell` once per specification before adding vacuum and oxygen.
 Enable it with `Relaxation = bulk` in that specification's `OxParams`.
+Omit the parameter or set `Relaxation = off` to skip `optunitcell` and use the
+supplied POSCAR.
 
 ## Monitoring and outputs
 

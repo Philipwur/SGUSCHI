@@ -411,9 +411,17 @@ def TestAdvanceLaunchesAllSpecsAndIsolatesFailure(tmp_path, monkeypatch):
     assert not list(Bad.glob("*/Dir_VolSearch"))
 
 
-def TestAcceptedSpecAutomaticallyLaunchesMd(Spec, monkeypatch):
+@pytest.mark.parametrize("Mode", ["bulk", "off", None])
+def TestRelaxationChoiceLaunchesMd(Spec, monkeypatch, Mode):
     Root, Params = Spec
-    Complete(Spec, monkeypatch)
+    if Mode == "bulk":
+        Complete(Spec, monkeypatch)
+    else:
+        Config = Root / "OxParams"
+        Config.write_text(Config.read_text().replace("Relaxation=bulk\n",
+                          "Relaxation=off\n" if Mode == "off" else ""))
+        monkeypatch.setattr(B, "BuildInputs", lambda *a: pytest.fail("Disabled relaxation was prepared"))
+        monkeypatch.setattr(B.subprocess, "Popen", lambda *a, **k: pytest.fail("Disabled optunitcell was launched"))
     Submitted = []
     def Submit(Command, cwd=None, **kwargs):
         Submitted.append(Path(cwd))
@@ -428,6 +436,9 @@ def TestAcceptedSpecAutomaticallyLaunchesMd(Spec, monkeypatch):
     monkeypatch.setattr(SGUSCHI, "RunOrchestration", lambda Root, Params, Dirs: Seen.extend(Dirs) or 0)
     assert SGUSCHI.main() == 0
     assert len(Submitted) == len(Seen) == 4
+    if Mode != "bulk":
+        assert not (Root / B.NAME).exists()
+        assert not list(Root.glob("*/BulkRelaxation.sha256"))
 
 
 def TestSubmittedInputModifiedDuringCalculationFails(Spec, monkeypatch):

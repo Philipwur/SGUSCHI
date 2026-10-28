@@ -12,7 +12,9 @@ NSims = 4 #Number of small cells to run per temperature.
 
 # Optional oxygen-free bulk relaxation before creating any trajectories.
 # One accepted geometry is reused for every temperature and replica in this spec.
-# Relaxation = bulk
+# off: skip optunitcell and use the supplied POSCAR; bulk: run optunitcell first.
+# Omitting Relaxation is equivalent to off.
+Relaxation = off
 # See docs/bulk-relaxation.md for cutoff, k-mesh and walltime overrides.
 
 #Simulation Runtime Parameters
