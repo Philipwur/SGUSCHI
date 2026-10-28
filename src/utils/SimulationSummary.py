@@ -11,6 +11,7 @@ import ast
 import csv
 import datetime
 import getpass
+import json
 import os
 import re
 import shutil
@@ -857,12 +858,40 @@ def WriteOutputs(RootDir: Path, Rows: Sequence[SimulationRow]) -> None:
     TsvPath = RootDir / SUMMARY_TSV
     TsvPath.parent.mkdir(parents=True, exist_ok=True)
 
-    AtomicWriteText(TextPath, FormatTable(Rows))
+    AtomicWriteText(TextPath, FormatTable(Rows) + FormatRelaxations(RootDir))
 
     Lines = ["\t".join(Display for _, Display in SUMMARY_COLUMNS)]
     for Row in Rows:
         Lines.append("\t".join(str(getattr(Row, Field)) for Field, _ in SUMMARY_COLUMNS))
     AtomicWriteText(TsvPath, "\n".join(Lines) + "\n")
+
+
+def FormatRelaxations(RootDir: Path) -> str:
+    """Report specification-level preparation separately from MD trajectories."""
+    Config = RootDir / "OxParams"
+    Roots = [RootDir]
+    if Config.exists():
+        Matches = re.findall(r"(?m)^\s*JobSpecs\s*=\s*([^\r\n]*)", Config.read_text(encoding="utf-8"))
+        if Matches:
+            Entries = ParseJobSpecs({"JobSpecs": re.split(r"[#!]", Matches[-1], maxsplit=1)[0]})
+            if Entries:
+                Roots = [RootDir / Entry for Entry in Entries]
+    Lines = []
+    for Root in Roots:
+        Record = Root / "BulkRelaxation/Status.json"
+        if not Record.exists():
+            continue
+        try:
+            Value = json.loads(Record.read_text(encoding="utf-8"))
+            Metrics = Value.get("metrics", {})
+            Force = Metrics.get("max_force_eVA", "-")
+            Pressure = Metrics.get("residual_pressure_kbar", "-")
+            Lines.append("{}: {} | pass {} | job {} | Fmax {} eV/A | residual P {} kbar | {}".format(
+                Root.name, Value.get("state", "unknown"), Value.get("pass", "-"),
+                Value.get("job_id", "-"), Force, Pressure, Value.get("detail", "")))
+        except (OSError, ValueError, TypeError):
+            Lines.append(Root.name + ": unreadable relaxation status; inspect BulkRelaxation")
+    return "\nBulk relaxations (one per specification)\n" + "\n".join(Lines) + "\n" if Lines else ""
 
 
 def AtomicWriteText(PathFile: Path, Text: str) -> None:
@@ -906,7 +935,7 @@ def WriteSummaryOnce(
     """Build and write one summary refresh."""
     Rows = BuildSummary(RootDir, OxParamsPath)
     if PrintOnly:
-        print(FormatTable(Rows), end="")
+        print(FormatTable(Rows) + FormatRelaxations(RootDir), end="")
         return
     WriteOutputs(RootDir, Rows)
     if not Quiet:

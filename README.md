@@ -91,6 +91,10 @@ For development tools and tests, see the [developer guide](docs/development.md#t
 
 For individual parameters, see the [configuration reference](docs/usage.md#configuration-reference).
 
+Optional [automatic bulk relaxation](docs/bulk-relaxation.md) runs the bundled
+SLUSCHI `optunitcell` once per specification before adding vacuum and oxygen.
+Enable it with `Relaxation = bulk` in that specification's `OxParams`.
+
 ## Monitoring and outputs
 
 The controller automatically refreshes `SimulationSummary` every 60 seconds
@@ -104,6 +108,7 @@ while it is running. A TSV copy is written to `logs/SimulationSummary.tsv`.
 | `873_1/log.out` | Trajectory workflow and recovery messages |
 
 For grouped runs, trajectory outputs live inside each specification's workspace.
+
 See [output formats and units](docs/usage.md#monitoring-and-outputs) or
 [monitoring troubleshooting](docs/troubleshooting.md#simulation-summary).
 

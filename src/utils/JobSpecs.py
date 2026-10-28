@@ -155,8 +155,13 @@ def CheckScientificInputs(Spec: JobSpec) -> dict:
     """
     from workflow import VaspIO as vio
 
-    Mutable = {"Temperatures", "NSims", "MaxRuntime", "JobSpecs"}
+    Mutable = {"Temperatures", "NSims", "MaxRuntime", "JobSpecs", "RelaxWalltime"}
     Params = {Key: Value for Key, Value in Spec.Params.items() if Key not in Mutable}
+    # Adding the explicit default must not invalidate an existing MD workspace.
+    from utils import BulkRelaxation
+    Relaxing = BulkRelaxation.Enabled(Params)
+    if not Relaxing:
+        Params.pop("Relaxation", None)
     Hashes = {}
     for Name in ("POSCAR", "POTCAR", "INCAR", "KPOINTS", "CovalentRadii"):
         Digest = hashlib.sha256()
@@ -167,6 +172,10 @@ def CheckScientificInputs(Spec: JobSpec) -> dict:
     JobParams = vio.ReadKeyValueFile(Spec.Root / "job.in")
     JobParams.pop("vaspcmd", None)
     Record = {"version": 1, "parameters": Params, "files": Hashes, "job.in": JobParams}
+    if Relaxing:
+        Accepted = BulkRelaxation.AcceptedHash(Spec.Root)
+        if Accepted:
+            Record["bulk_relaxation_sha256"] = Accepted
     RecordPath = Spec.Root / INPUT_RECORD
     if RecordPath.exists():
         try:

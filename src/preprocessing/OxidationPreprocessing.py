@@ -17,7 +17,48 @@ from workflow import OxidationAnalysis as an
 
 
 
-def AddVacuum(Position, CellDim, GasRatio, Axis='x'):
+def CleavageShift(Coords):
+    """Existing largest-gap rule, including its original-boundary tie break."""
+    Sorted = np.sort(np.asarray(Coords) % 1.0)
+    Gaps = np.diff(Sorted)
+    WrapGap = 1.0 - Sorted[-1] + Sorted[0]
+    AllGaps = np.append(Gaps, WrapGap)
+    Index = int(np.argmax(AllGaps))
+    if np.isclose(WrapGap, AllGaps[Index], rtol=0, atol=1e-12):
+        Index = len(Gaps)
+    return ((Sorted[Index] + Sorted[Index + 1]) / 2 if Index < len(Gaps)
+            else ((Sorted[-1] + Sorted[0] + 1) / 2) % 1)
+
+
+def PreservedSlabCoordinates(Original, Relaxed, Axis=0):
+    """Unwrap by original atom identities, not the relaxed largest gap.
+
+    Remove rigid translation using the circular mean displacement; keep each
+    atom on its original branch about the recorded cut. The resulting occupied
+    span must fit inside one bulk repeat. Large/ambiguous reconstruction is
+    rejected rather than silently exposing another SQS decoration.
+    """
+    Original, Relaxed = np.asarray(Original), np.asarray(Relaxed)
+    if Original.shape != Relaxed.shape or Original.ndim != 2 or Original.shape[1] != 3:
+        raise ValueError("Cleavage reference must match the relaxed atom order")
+    Before = Original[:, Axis] % 1
+    Delta = Relaxed[:, Axis] - Before
+    Circular = np.mean(np.exp(2j * np.pi * Delta))
+    if abs(Circular) < .5:
+        raise ValueError("Ambiguous rigid drift; cannot preserve the original cleavage")
+    Delta -= np.angle(Circular) / (2 * np.pi)
+    Delta -= np.floor(Delta + .5)
+    if np.max(np.abs(Delta)) >= .25:
+        raise ValueError("Large atomic reconstruction; original cleavage requires review")
+    Unwrapped = (Before - CleavageShift(Before)) % 1 + Delta
+    if np.ptp(Unwrapped) >= 1 - 1e-8:
+        raise ValueError("Original cleavage no longer has a separating gap")
+    # Centre the remaining gap at the periodic boundary without rewrapping atoms.
+    Unwrapped += (1 - Unwrapped.max() - Unwrapped.min()) / 2
+    return Unwrapped
+
+
+def AddVacuum(Position, CellDim, GasRatio, Axis='x', CleavageReference=None):
     '''
     Function which adds vacuum to the CellDim along Axis by GasRatio.
     Scales fractional positions accordingly (keeps Cartesian positions unchanged).
@@ -59,27 +100,12 @@ def AddVacuum(Position, CellDim, GasRatio, Axis='x'):
     # logic will need to be revised (e.g. use a user-supplied shift, or detect the
     # vacuum vs. inter-layer gap distinction explicitly).
     Position_new = Position.copy()
-    Coords = Position_new[Axis].to_numpy() % 1.0
-    Sorted = np.sort(Coords)
-    Gaps = np.diff(Sorted)
-    WrapGap = 1.0 - Sorted[-1] + Sorted[0]
-    AllGaps = np.append(Gaps, WrapGap)
-    MaxIdx = int(np.argmax(AllGaps))
-
-    # Preserve the input's surface planes when the boundary gap is tied for
-    # largest. Ideal crystal layers have equal gaps; decimal roundoff must not
-    # pick an interior cut and expose a different SQS decoration. A genuinely
-    # smaller boundary gap still uses the largest interior gap, as needed for
-    # a layer that straddles the periodic boundary.
-    if np.isclose(WrapGap, AllGaps[MaxIdx], rtol=0.0, atol=1e-12):
-        MaxIdx = len(Gaps)
-
-    if MaxIdx < len(Gaps):
-        GapCenter = (Sorted[MaxIdx] + Sorted[MaxIdx + 1]) / 2.0
+    if CleavageReference is None:
+        GapCenter = CleavageShift(Position_new[Axis].to_numpy())
+        Position_new[Axis] = (Position_new[Axis] - GapCenter) % 1.0
     else:
-        GapCenter = ((Sorted[-1] + Sorted[0] + 1.0) / 2.0) % 1.0
-
-    Position_new[Axis] = (Position_new[Axis] - GapCenter) % 1.0
+        Position_new[Axis] = PreservedSlabCoordinates(
+            CleavageReference, Position_new[['x', 'y', 'z']].to_numpy(), row)
 
     # --- rescale fractional coordinates along Axis to preserve Cartesian positions ---
     Position_new[Axis] = Position_new[Axis] / scale
@@ -90,7 +116,7 @@ def AddVacuum(Position, CellDim, GasRatio, Axis='x'):
     return Position_new, CellDim_new
 
 
-def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
+def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10, CleavageReference=None):
     '''
     Function which prepares the POSCAR for oxidation simulations.
     Expands the x-dimension by GasRatio and scales fractional positions.
@@ -101,7 +127,8 @@ def PreparePOSCAR(Position, CellDim, GasRatio = 2, InitO2 = 10):
     
     #First expand the x-dimension by GasRatio and scale fractional positions
      
-    Position, CellDim = AddVacuum(Position, CellDim, GasRatio = GasRatio)
+    Position, CellDim = AddVacuum(Position, CellDim, GasRatio = GasRatio,
+                                 CleavageReference=CleavageReference)
     NewSites = an.FindOptimalCoords(Position, CellDim, N = InitO2)
     Position = an.PlaceO2Molecules(Positions = Position,
                                   CellDim = CellDim,

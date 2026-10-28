@@ -1,5 +1,25 @@
 #!/bin/csh
 
+# SGUSCHI supplies static inputs and runs this routine once per specification.
+# Keep the legacy standalone path below intact. The shell owns the two passes;
+# the helper owns scheduler records, validation, and atomic publication.
+if ( $#argv > 0 ) then
+  if ( "$1" == "--sguschi" ) then
+    if ( ! $?sguschipath || ! $?SGUSCHI_PYTHON ) then
+      echo "FATAL optunitcell: SGUSCHI helper paths are not configured."
+      exit 1
+    endif
+    foreach pass ( 1 2 )
+      "$SGUSCHI_PYTHON" "$sguschipath/../../utils/BulkRelaxation.py" pass $pass
+      if ( $status != 0 ) exit 1
+    end
+    "$SGUSCHI_PYTHON" "$sguschipath/../../utils/BulkRelaxation.py" accept
+    exit $status
+  endif
+  echo "FATAL optunitcell: unknown argument."
+  exit 1
+endif
+
 cd ..
 cp INCAR POSCAR POTCAR jobsub job.in Dir_OptUnitCell
 cp KPOINTS_OPT Dir_OptUnitCell/KPOINTS

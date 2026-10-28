@@ -4,6 +4,7 @@ For installation and a first run, start with the [README](../README.md).
 For errors and manual recovery, see [Troubleshooting](troubleshooting.md).
 
 - [Multiple job specifications](#multiple-job-specifications-with-one-controller)
+- [Automatic bulk relaxation](bulk-relaxation.md)
 - [Monitoring and outputs](#monitoring-and-outputs)
 - [Resuming and extending runs](#resuming-and-extending-runs)
 - [Configuration reference](#configuration-reference)

@@ -96,7 +96,14 @@ def SetupWorkspace(
     RequiredFiles = ["POSCAR", "KPOINTS", "POTCAR", "INCAR", "job.in", "jobsub", "CovalentRadii"]
     EnsureFilesExist(WorkDir, RequiredFiles)
 
-    Position, CellDim = vio.ReadPoscar(WorkDir)
+    from utils import BulkRelaxation
+    CleavageReference = None
+    RelaxedHash = None
+    if BulkRelaxation.Enabled(Params):
+        Position, CellDim, CleavageReference = BulkRelaxation.Geometry(WorkDir)
+        RelaxedHash = BulkRelaxation.AcceptedHash(WorkDir)
+    else:
+        Position, CellDim = vio.ReadPoscar(WorkDir)
 
     JobsubBasePath = WorkDir / "jobsub"
     with JobsubBasePath.open("r", encoding="utf-8") as F:
@@ -166,13 +173,19 @@ def SetupWorkspace(
             VolSearchDir.mkdir(parents=True, exist_ok=True)
             OptUnitDir.mkdir(parents=True, exist_ok=True)
 
-            # Create optunitcell_is_done file
-            (OptUnitDir / "optunitcell_is_done").touch()
+            # Legacy compatibility marker; the authoritative bulk result lives
+            # at the specification level and is validated before this point.
+            if RelaxedHash:
+                WriteTextFile(OptUnitDir / "optunitcell_is_done",
+                              "Validated specification bulk SHA256: " + RelaxedHash + "\n")
+                WriteTextFile(SimDir / "BulkRelaxation.sha256", RelaxedHash + "\n")
+            else:
+                (OptUnitDir / "optunitcell_is_done").touch()
 
             # Prepare new POSCAR (unique per folder)
+            Extra = {"CleavageReference": CleavageReference} if CleavageReference is not None else {}
             NewPosition, NewCellDim = opp.PreparePOSCAR(
-                Position, CellDim, GasRatio=GasRatio, InitO2=InitO2
-            )
+                Position, CellDim, GasRatio=GasRatio, InitO2=InitO2, **Extra)
             vio.WritePoscar(str(SimDir), NewPosition, NewCellDim)
             print("Prepared POSCAR for {}".format(FolderName))
 

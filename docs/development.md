@@ -14,6 +14,13 @@ prepares new trajectories, reconciles runtime caps, submits initial VASP jobs,
 and starts one `volsearch_cont` process per pending trajectory. The controller
 also starts the campaign or workspace summary watcher.
 
+When bulk relaxation is enabled, the controller first invokes the bundled
+SLUSCHI optunitcell routine once per specification. BulkRelaxation.py stages
+static inputs, guards submissions, validates both passes and publishes an
+accepted geometry. Workspace setup uses that geometry and the original cleavage
+reference before adding vacuum or oxygen. Preparation status is independent of
+MD state markers; see [automatic bulk relaxation](bulk-relaxation.md).
+
 `src/utils/InitialVasp.py` owns initial INCAR preparation. Workspace setup and
 trajectory reconstruction share it, and the controller prepares all eligible
 first jobs before submitting any. `volsearch_cont` calls the same guarded helper

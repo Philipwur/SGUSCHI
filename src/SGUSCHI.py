@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from utils import StatusLog
+from utils import BulkRelaxation
 from utils.InitialVasp import NeedsInitialVaspJob, PrepareInitialVasp
 from utils.JobSpecs import (
     CheckScientificInputs, LoadJobSpecs, RecordScientificInputs, INPUT_RECORD, REQUIRED_KEYS,
@@ -74,6 +75,10 @@ def ParseArgs() -> argparse.Namespace:
         action="store_true",
         help="Prepare simulation folders and initial INCAR settings; do not submit VASP jobs or launch "
              "volsearch_cont (safe to run on a login node)",
+    )
+    Parser.add_argument(
+        "--relax-only", action="store_true",
+        help="Run enabled bulk relaxations and stop before creating oxidation trajectories",
     )
     return Parser.parse_args()
 
@@ -583,6 +588,20 @@ def main() -> int:
         print("ERROR: {}".format(Error))
         return 1
 
+    # Relaxation belongs to the specification, before oxygen or replica setup.
+    # Advance preflights every specification before preparing/submitting any.
+    try:
+        Specs, RelaxFailed = BulkRelaxation.Advance(Specs, Args)
+        if getattr(Args, "relax_only", False) or not Specs:
+            return 1 if RelaxFailed else 0
+        InputRecords = {
+            Spec.Id: CheckScientificInputs(Spec) for Spec in Specs
+            if Spec.Id or BulkRelaxation.Enabled(Spec.Params) or (Spec.Root / INPUT_RECORD).exists()
+        }
+    except (OSError, ValueError, SyntaxError, TypeError) as Error:
+        print("ERROR bulk relaxation: {}".format(Error))
+        return 1
+
     States: Dict[str, str] = {}
     AllDirs: List[Tuple[str, Path]] = []
     LocalStates = {}
@@ -625,7 +644,7 @@ def main() -> int:
     # one orchestration call so different specifications run concurrently.
     try:
         for Spec in Specs:
-            if Spec.Id:
+            if Spec.Id or BulkRelaxation.Enabled(Spec.Params):
                 RecordScientificInputs(Spec, InputRecords[Spec.Id])
             NewLocal = [L for L, S in LocalStates[Spec.Id].items() if S == "new"]
             if NewLocal:
@@ -646,7 +665,7 @@ def main() -> int:
         else:
             print("No new simulation folders; checked unsubmitted first-job inputs.")
         print("--prepare-only: skipping VASP job submission and volsearch_cont launch.")
-        return 0
+        return 1 if RelaxFailed else 0
 
     FailedLabels: Set[str] = set()
     for Spec in Specs:
@@ -671,12 +690,12 @@ def main() -> int:
             print("All eligible simulations failed initial submission. Aborting.")
             return 1
         print("All simulations are already done. Nothing to run.")
-        return 0
+        return 1 if RelaxFailed else 0
 
     print("Starting volsearch_cont for {} simulation(s)...".format(len(PendingDirs)))
     RC = RunOrchestration(WorkDir, {}, PendingDirs)
     # Treat the overall run as failed if any initial submission also failed.
-    return 1 if (RC != 0 or FailedLabels) else 0
+    return 1 if (RC != 0 or FailedLabels or RelaxFailed) else 0
 
 
 if __name__ == "__main__":
