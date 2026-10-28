@@ -7,7 +7,6 @@ The source workspace and existing trajectories are never overwritten.
 from __future__ import annotations
 
 import argparse
-import ast
 from contextlib import contextmanager
 import hashlib
 import json
@@ -206,6 +205,10 @@ def BulkPotential(Text, Species):
 def BuildInputs(SpecRoot, Params):
     """Read-only preflight; generate exactly the inputs the routine will consume."""
     from workflow.VaspIO import ReadKeyValueFile
+    Removed = [Key for Key in ("RelaxENCUT", "RelaxKMesh") if Key in Params]
+    if Removed:
+        raise ValueError("Remove {} from OxParams: bulk relaxation uses the supplied INCAR and KPOINTS".format(
+            ", ".join(Removed)))
     SpecRoot = Path(SpecRoot)
     Structure = ReadStructure(SpecRoot / "POSCAR")
     Species, Counts, Cell, Frac, Flags = Structure
@@ -222,23 +225,22 @@ def BuildInputs(SpecRoot, Params):
     if Steps != int(Steps):
         raise ValueError("RelaxMaxSteps must be an integer")
     Values = IncarValues((SpecRoot / "INCAR").read_text())
-    EDiff = min(Number(Values.get("EDIFF", "1e-4"), "EDIFF"), 1e-6)
-    Nelm = max(int(Values.get("NELM", 60)), 200)
+    # Preserve electronic settings, including omitted VASP defaults. Read NELM
+    # only so output validation uses the same iteration cap as the calculation.
+    Nelm = Number(Values.get("NELM", 60), "NELM")
+    if Nelm != int(Nelm):
+        raise ValueError("NELM must be an integer")
+    Nelm = int(Nelm)
     JobParams = ReadKeyValueFile(SpecRoot / "job.in")
-    Target = Number(JobParams.get("press", 0), "press", Positive=False)
+    Target = Number(Values.get("PSTRESS", JobParams.get("press", 0)), "PSTRESS/press", Positive=False)
     for Key in ("TEBEG", "TEEND", "SMASS", "MDALGO", "LANGEVIN_GAMMA", "LANGEVIN_GAMMA_L", "PMASS", "ANDERSEN_PROB", "NBLOCK", "KBLOCK", "NPACO", "APACO"):
         Values.pop(Key, None)
-    Values.update(IBRION="2", ISIF="8", POTIM="0.3", PREC="Accurate", EDIFF=str(EDiff),
-                  EDIFFG=str(-Force), ISMEAR="0", SIGMA="0.05", NELM=str(Nelm),
-                  NSW=str(int(Steps)), PSTRESS=str(Target), ISTART="0", ICHARG="2", NWRITE="2")
-    if "RelaxENCUT" in Params:
-        Values["ENCUT"] = str(Number(Params["RelaxENCUT"], "RelaxENCUT"))
+    # Only convert MD to fresh, two-pass ionic/volume relaxation. NWRITE >= 2
+    # supplies the force/stress diagnostics used by acceptance checks.
+    Values.update(IBRION="2", ISIF="8", POTIM="0.3", EDIFFG=str(-Force),
+                  NSW=str(int(Steps)), PSTRESS=str(Target), ISTART="0", ICHARG="2",
+                  NWRITE=str(max(int(Values.get("NWRITE", 2)), 2)))
     Kpoints = (SpecRoot / "KPOINTS").read_text()
-    if "RelaxKMesh" in Params:
-        Mesh = ast.literal_eval(str(Params["RelaxKMesh"]))
-        if not isinstance(Mesh, list) or len(Mesh) != 3 or any(type(N) is not int or N < 1 for N in Mesh):
-            raise ValueError("RelaxKMesh must be three positive integers")
-        Kpoints = "SGUSCHI relaxation mesh\n0\nGamma\n{}\n0 0 0\n".format(" ".join(map(str, Mesh)))
     Command = shlex.split(JobParams.get("vaspcmd", "sbatch"))
     if not Command or Path(Command[0]).name not in ("sbatch", "qsub"):
         raise ValueError("Managed relaxation supports sbatch or qsub via vaspcmd")
@@ -592,7 +594,7 @@ def Advance(Specs, Args):
         for Spec in Specs:
             if Spec.Id in Plans:
                 Action = "reuse accepted bulk" if AcceptedHash(Spec.Root) else "run two-pass optunitcell before trajectory setup"
-                print("[{}] Would {} (MD cutoff/mesh inherited unless overridden).".format(Spec.Id or Spec.Root.name, Action))
+                print("[{}] Would {} (supplied electronic settings and KPOINTS retained).".format(Spec.Id or Spec.Root.name, Action))
         # Only accepted/off specs can already prepare trajectories in this dry plan.
         return [S for S in Specs if S.Id not in Plans or AcceptedHash(S.Root)], False
     for Spec in Specs:

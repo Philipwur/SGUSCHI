@@ -96,6 +96,8 @@ SLUSCHI `optunitcell` once per specification before adding vacuum and oxygen.
 Enable it with `Relaxation = bulk` in that specification's `OxParams`.
 Omit the parameter or set `Relaxation = off` to skip `optunitcell` and use the
 supplied POSCAR.
+Relaxation retains your electronic settings and KPOINTS, changing only the
+INCAR controls needed for static relaxation and its validation.
 
 ## Monitoring and outputs
 

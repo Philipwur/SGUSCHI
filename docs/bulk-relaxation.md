@@ -24,31 +24,32 @@ does not cancel an already submitted job or change existing MD trajectories.
 | RelaxForceTol | 0.02 | Maximum final force, eV/Å |
 | RelaxPressureTol | 1.0 | Allowed residual pressure relative to press, kbar |
 | RelaxMaxSteps | 200 | Ionic steps per pass |
-| RelaxENCUT | Inherit | Optional cutoff override, eV |
-| RelaxKMesh | Inherit | Optional Gamma-centred mesh, e.g. [3,4,4] |
 | RelaxWalltime | Inherit | Optional Slurm [days-]HH:MM:SS or PBS hours:MM:SS |
 
 The existing POSCAR, INCAR, KPOINTS, POTCAR, job.in and jobsub are source inputs.
-Cutoff and k-point sampling are inherited **without a convergence claim**.
-For example, the miscellaneous bulk preparation used:
+Relaxation uses the supplied electronic settings and KPOINTS. It does not
+increase the cutoff, refine the k-mesh, tighten EDIFF, raise NELM, or change
+PREC, ISMEAR or SIGMA. Omitted electronic settings retain their VASP defaults.
+For example:
 
 ```text
 Relaxation = bulk
-RelaxENCUT = 700
-RelaxKMesh = [3,4,4]
 RelaxWalltime = 24:00:00
 ```
 
-These are an example for those cells, not universal convergence settings.
-Volume relaxation is sensitive to basis-set/Pulay stress; check sampling and
-cutoff for your material. See [VASP volume relaxation](https://vasp.at/wiki/Volume_relaxation).
+Only the changes needed to convert MD to relaxation are made: IBRION=2,
+ISIF=8, POTIM=0.3 (ionic optimiser step), NSW=RelaxMaxSteps and
+EDIFFG=-RelaxForceTol. MD thermostat settings and velocities are removed.
+Each pass starts from atomic charge densities (ISTART=0, ICHARG=2) without
+reusing WAVECAR/CHGCAR. NWRITE is at least 2 for force/stress validation.
+PSTRESS is retained if supplied in INCAR; otherwise it uses press from job.in,
+defaulting to zero. Spin, mixing, LREAL and other electronic settings are retained.
 
-The static profile uses IBRION=2, ISIF=8, POTIM=0.3, PREC=Accurate, Gaussian
-smearing at 0.05 eV, EDIFF no looser than 1e-6, NELM at least 200 and
-EDIFFG=-RelaxForceTol. Spin, mixing, LREAL and other electronic settings are
-otherwise inherited. MD thermostat settings and velocities are removed.
-Each pass starts from atomic charge densities without reusing WAVECAR/CHGCAR.
-The pressure target is press from job.in, defaulting to zero if absent.
+The earlier RelaxENCUT and RelaxKMesh options are no longer supported. Remove
+them from OxParams; the cutoff and sampling come from INCAR and KPOINTS only.
+The common bulk relaxation uses the supplied SIGMA, not one relaxation per
+temperature. Subsequent MD still applies its existing temperature-specific
+initialisation settings.
 
 ISIF=8 relaxes positions and volume at fixed cell shape and requires
 [VASP 6.4.1 or later](https://vasp.at/wiki/ISIF). The output version is checked.

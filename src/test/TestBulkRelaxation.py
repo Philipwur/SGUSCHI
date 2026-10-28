@@ -29,7 +29,8 @@ def WriteSpec(Root):
         for S in ("Zr_sv", "C", "O")))
     (Root / "INCAR").write_text("ENCUT = 400\nIBRION = 0\nISIF = 2\nNSW = 80\n"
                                "TEBEG = 973; TEEND=973\nSMASS=0\nEDIFF=1e-5\n"
-                               "SIGMA=.08\nISPIN=1\nAMIX=.2\nLREAL=.FALSE.\n")
+                               "SIGMA=.08\nISMEAR=-1\nPREC=Normal\nNELM=80\n"
+                               "ISPIN=1\nAMIX=.2\nLREAL=.FALSE.\n")
     (Root / "KPOINTS").write_text("MD mesh\n1\nReciprocal\n.25 .25 .25 1\n")
     (Root / "job.in").write_text("temp=973\npress=0\nvaspcmd=sbatch\n")
     (Root / "jobsub").write_text("#!/bin/bash\n#SBATCH --job-name=old\n#SBATCH --time=03:00:00\n"
@@ -86,6 +87,10 @@ def TestDerivationKeepsMdPrecisionAndOriginals(Spec):
     assert Values["ENCUT"] == "400" and Values["ISIF"] == "8"
     assert Values["IBRION"] == "2" and Values["NSW"] == "200"
     assert Values["EDIFFG"] == "-0.02" and Values["AMIX"] == ".2"
+    Original = B.IncarValues((Root / "INCAR").read_text())
+    for Key in ("ENCUT", "PREC", "EDIFF", "NELM", "ISMEAR", "SIGMA", "ISPIN", "AMIX", "LREAL"):
+        assert Values[Key] == Original[Key]
+    assert Plan["config"]["nelm"] == 80
     assert not {"TEBEG", "TEEND", "SMASS"} & Values.keys()
     assert "PAW_PBE O " not in Plan["files"]["POTCAR"]
     assert "PAW_PBE Zr_sv" in Plan["files"]["POTCAR"]
@@ -94,12 +99,10 @@ def TestDerivationKeepsMdPrecisionAndOriginals(Spec):
     assert not list(Root.glob("*/Dir_VolSearch"))
 
 
-def TestOverridesAndNoTemperatureSpecificRelaxation(Spec):
+def TestWalltimeAndNoTemperatureSpecificRelaxation(Spec):
     Root, Params = Spec
-    Params.update(RelaxENCUT="700", RelaxKMesh="[3,4,4]", RelaxWalltime="24:00:00")
+    Params.update(RelaxWalltime="24:00:00")
     Plan = B.BuildInputs(Root, Params)
-    assert B.IncarValues(Plan["files"]["INCAR"])["ENCUT"] == "700.0"
-    assert "3 4 4" in Plan["files"]["KPOINTS_OPT"]
     assert "#SBATCH --time=24:00:00" in Plan["files"]["jobsub"]
     assert "--time=03" not in Plan["files"]["jobsub"]
     assert "--ntasks=48" in Plan["files"]["jobsub"]
@@ -107,9 +110,41 @@ def TestOverridesAndNoTemperatureSpecificRelaxation(Spec):
     assert B.BuildInputs(Root, Params)["fingerprint"] == Plan["fingerprint"]
 
 
+def TestOmittedElectronicSettingsRemainOmitted(Spec):
+    Root, Params = Spec
+    (Root / "INCAR").write_text("IBRION=0\nNSW=80\nPOTIM=1\nPSTRESS=2.5\nNWRITE=3\n")
+    Plan = B.BuildInputs(Root, Params)
+    Values = B.IncarValues(Plan["files"]["INCAR"])
+    assert not {"ENCUT", "PREC", "EDIFF", "NELM", "ISMEAR", "SIGMA"} & Values.keys()
+    assert Plan["config"]["nelm"] == 60
+    assert Plan["config"]["target_pressure"] == 2.5
+    assert Values["NWRITE"] == "3"
+
+
+@pytest.mark.parametrize("Key,Value", [("RelaxENCUT", "700"), ("RelaxKMesh", "[3,4,4]")])
+def TestRemovedPrecisionOverridesAreNotSilentlyUsed(Spec, Key, Value):
+    Root, Params = Spec
+    Params[Key] = Value
+    with pytest.raises(ValueError, match="uses the supplied INCAR and KPOINTS"):
+        B.BuildInputs(Root, Params)
+
+
+def TestElectronicCapUsesSuppliedNelm(Spec, monkeypatch):
+    Root, Params = Spec
+    B.Prepare(Root, B.BuildInputs(Root, Params))
+    def Submit(Command, cwd=None, **kwargs):
+        Folder = Path(cwd)
+        Outputs(Folder)
+        (Folder / "OSZICAR").write_text("DAV: 80 -100 .0 .0\n 1 F= -100 E0= -100\n")
+        return SimpleNamespace(returncode=0, stdout="Submitted batch job 123\n", stderr="")
+    monkeypatch.setattr(B.subprocess, "run", Submit)
+    with pytest.raises(ValueError, match="iteration cap"):
+        B.RunPass(Root / B.NAME, 1)
+    assert not B.AcceptedHash(Root)
+
+
 @pytest.mark.parametrize("Key,Value", [("Relaxation", "yes"), ("RelaxForceTol", "nan"),
-    ("RelaxPressureTol", "-1"), ("RelaxMaxSteps", "2.5"), ("RelaxKMesh", "[1,0,1]"),
-    ("RelaxWalltime", "bad"), ("RelaxENCUT", "0")])
+    ("RelaxPressureTol", "-1"), ("RelaxMaxSteps", "2.5"), ("RelaxWalltime", "bad")])
 def TestInvalidSettings(Spec, Key, Value):
     Root, Params = Spec
     Params[Key] = Value
@@ -279,7 +314,7 @@ def TestStandalonePreparationStopsAtCorrectStage(tmp_path, Mode, Grouped):
 def TestPreflightAllSpecsBeforeAnyMutation(tmp_path):
     A, C = tmp_path / "a", tmp_path / "c"
     Pa, Pc = WriteSpec(A), WriteSpec(C)
-    Pc["RelaxKMesh"] = "[0,1,1]"
+    Pc["RelaxMaxSteps"] = "0"
     Args = SimpleNamespace(workdir=str(tmp_path), dry_run=False, prepare_only=True)
     with pytest.raises(ValueError):
         B.Advance([JobSpec("a", A, Pa), JobSpec("c", C, Pc)], Args)
